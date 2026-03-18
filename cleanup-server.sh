@@ -27,11 +27,11 @@ cmd_report() {
     echo ""
 
     $SSH "
-        echo '📊 Disk overview:'
+        echo 'Disk overview:'
         df -h / | tail -1 | awk '{printf \"   Total: %s  Used: %s  Free: %s  (%s used)\n\", \$2, \$3, \$4, \$5}'
         echo ''
 
-        echo '🗂  Space by category:'
+        echo 'Space by category:'
         printf '   %-40s %s\n' 'pip cache' \$(du -sh ~/.cache/pip/ 2>/dev/null | cut -f1 || echo '0')
         printf '   %-40s %s\n' 'apt cache' \$(sudo du -sh /var/cache/apt/ 2>/dev/null | cut -f1 || echo '0')
         printf '   %-40s %s\n' 'Journal logs' \$(sudo journalctl --disk-usage 2>/dev/null | grep -oP '[\d.]+[KMGT]' || echo '0')
@@ -46,7 +46,7 @@ cmd_report() {
         echo \"   Kernel images installed: \$KERNELS (current: \$CURRENT)\"
         echo ''
 
-        echo '📦 Application data (NOT cleaned):'
+        echo 'Application data (NOT cleaned):'
         printf '   %-40s %s\n' 'pcb-inspect venv' \$(du -sh /opt/pcb-inspect/venv/ 2>/dev/null | cut -f1 || echo '0')
         printf '   %-40s %s\n' 'pcb-inspect app' \$(du -sh --exclude=venv --exclude=uploads --exclude=__pycache__ /opt/pcb-inspect/ 2>/dev/null | cut -f1 || echo '0')
         printf '   %-40s %s\n' 'mpts_NSCW' \$(du -sh /var/www/mpts_NSCW/ 2>/dev/null | cut -f1 || echo 'N/A')
@@ -65,7 +65,7 @@ cmd_clean() {
 
     # Run ALL cleanup in a single SSH session to avoid connection drops
     $SSH 'bash -s' <<'REMOTE_SCRIPT'
-        step() { printf "▶ [\033[0;36m%s\033[0m] %s\n" "$1" "$2"; }
+        step() { printf "[\033[0;36m%s\033[0m] %s\n" "$1" "$2"; }
         ok()   { printf "   \033[0;32mDone\033[0m\n"; }
 
         df -h / | tail -1 | awk '{printf "   Before: Used %s / %s (%s)\n\n", $3, $2, $5}'
@@ -105,7 +105,7 @@ cmd_clean() {
 REMOTE_SCRIPT
 
     echo ""
-    echo -e "${GREEN}${BOLD}✓ Cleanup complete!${NC}"
+    echo -e "${GREEN}${BOLD}Cleanup complete.${NC}"
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────

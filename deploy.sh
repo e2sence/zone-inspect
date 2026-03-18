@@ -103,7 +103,7 @@ cmd_diff() {
 
     echo ""
     if [ $has_diff -eq 0 ]; then
-        echo -e "  ${GREEN}✓ Everything in sync!${NC}"
+        echo -e "  ${GREEN}Everything in sync.${NC}"
     else
         echo -e "  Run ${BOLD}./deploy.sh deploy${NC} to push local → prod"
     fi
@@ -139,13 +139,13 @@ cmd_deploy() {
     echo ""
 
     # Pre-flight
-    echo -e "▶ ${CYAN}[1/5]${NC} Pre-flight check..."
-    $SSH "echo 'SSH OK'" || { echo -e "${RED}❌ Cannot SSH to $SERVER${NC}"; exit 1; }
+    echo -e "[${CYAN}1/5${NC}] Pre-flight check..."
+    $SSH "echo 'SSH OK'" || { echo -e "${RED}Cannot SSH to $SERVER${NC}"; exit 1; }
     echo "   Connected to $SERVER"
     echo ""
 
     # Show what will change
-    echo -e "▶ ${CYAN}[2/5]${NC} Changes to deploy:"
+    echo -e "[${CYAN}2/5${NC}] Changes to deploy:"
     cmd_diff
     echo ""
 
@@ -159,7 +159,7 @@ cmd_deploy() {
 
     # Rsync
     echo ""
-    echo -e "▶ ${CYAN}[3/5]${NC} Syncing code..."
+    echo -e "[${CYAN}3/5${NC}] Syncing code..."
     rsync -avz --delete \
         -e "ssh $SSH_OPTS" \
         "${RSYNC_EXCLUDES[@]}" \
@@ -168,7 +168,7 @@ cmd_deploy() {
     echo ""
 
     # Check if requirements changed → pip install
-    echo -e "▶ ${CYAN}[4/5]${NC} Checking dependencies..."
+    echo -e "[${CYAN}4/5${NC}] Checking dependencies..."
     local_req_md5=$(md5 -q "$LOCAL_DIR/requirements-prod.txt")
     remote_req_md5=$($SSH "md5sum $APP_DIR/requirements-prod.txt 2>/dev/null | cut -d' ' -f1" || echo "none")
     if [ "$local_req_md5" != "$remote_req_md5" ]; then
@@ -181,12 +181,12 @@ cmd_deploy() {
     echo ""
 
     # Restart service
-    echo -e "▶ ${CYAN}[5/5]${NC} Restarting service..."
+    echo -e "[${CYAN}5/5${NC}] Restarting service..."
     $SSH "sudo systemctl restart $SERVICE && sleep 2 && sudo systemctl is-active $SERVICE"
     echo -e "   ${GREEN}Service restarted${NC}"
     echo ""
 
-    echo -e "${GREEN}${BOLD}✓ Deploy complete!${NC}"
+    echo -e "${GREEN}${BOLD}Deploy complete.${NC}"
     echo -e "  https://inspect.metaprodtrace.com"
 }
 
@@ -203,7 +203,7 @@ cmd_status() {
 cmd_restart() {
     echo -e "Restarting ${SERVICE}..."
     $SSH "sudo systemctl restart $SERVICE && sleep 2 && sudo systemctl is-active $SERVICE"
-    echo -e "${GREEN}✓ Restarted${NC}"
+    echo -e "${GREEN}Restarted.${NC}"
 }
 
 cmd_ssh() {

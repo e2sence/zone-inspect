@@ -181,6 +181,7 @@ def _cleanup_sessions():
             # Remove mobile tokens pointing to this session
             _remove_tokens_for_session(sid)
 
+
 _cleanup_thread = threading.Thread(target=_cleanup_sessions, daemon=True)
 _cleanup_thread.start()
 

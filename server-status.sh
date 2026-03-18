@@ -33,22 +33,22 @@ echo ''
 # ── RAM ──
 read TOTAL USED FREE AVAIL <<< \$(free -m | awk '/^Mem:/ {print \$2, \$3, \$4, \$7}')
 PCT=\$((USED * 100 / TOTAL))
-echo \"🧠 RAM:    \${USED}M / \${TOTAL}M (\${PCT}%)  free: \${AVAIL}M\"
+echo \"RAM:    \${USED}M / \${TOTAL}M (\${PCT}%)  free: \${AVAIL}M\"
 
 # ── Disk ──
 read SIZE USED_D AVAIL_D PCT_D <<< \$(df -h / | awk 'NR==2 {print \$2, \$3, \$4, \$5}')
-echo \"💾 Disk:   \${USED_D} / \${SIZE} (\${PCT_D})  free: \${AVAIL_D}\"
+echo \"Disk:   \${USED_D} / \${SIZE} (\${PCT_D})  free: \${AVAIL_D}\"
 echo ''
 
 # ── Services ──
-echo '🔧 Services:'
+echo 'Services:'
 for SVC in pcb-inspect nginx; do
     STATUS=\$(systemctl is-active \$SVC 2>/dev/null || echo 'not found')
     if [ \"\$STATUS\" = 'active' ]; then
         SINCE=\$(systemctl show \$SVC --property=ActiveEnterTimestamp --value 2>/dev/null | sed 's/ [A-Z]*$//')
-        printf '   %-20s ✅ active  (since %s)\n' \"\$SVC\" \"\$SINCE\"
+        printf '   %-20s [OK] active  (since %s)\n' \"\$SVC\" \"\$SINCE\"
     else
-        printf '   %-20s ❌ %s\n' \"\$SVC\" \"\$STATUS\"
+        printf '   %-20s [FAIL] %s\n' \"\$SVC\" \"\$STATUS\"
     fi
 done
 
@@ -58,28 +58,28 @@ if command -v pm2 &>/dev/null; then
 import json,sys
 apps=json.load(sys.stdin)
 for a in apps:
-    print(f'   {a[\"name\"]:20s} {\"✅\" if a[\"pm2_env\"][\"status\"]==\"online\" else \"❌\"} {a[\"pm2_env\"][\"status\"]}  (↑ {a[\"pm2_env\"][\"restart_time\"]} restarts)')
+    print(f'   {a[\"name\"]:20s} {\"[OK]\" if a[\"pm2_env\"][\"status\"]==\"online\" else \"[FAIL]\"} {a[\"pm2_env\"][\"status\"]}  ({a[\"pm2_env\"][\"restart_time\"]} restarts)')
 \" 2>/dev/null) || PM2_STATUS='   pm2: no apps'
     echo \"\$PM2_STATUS\"
 fi
 echo ''
 
 # ── HTTP check ──
-echo '🌐 HTTP:'
+echo 'HTTP:'
 HTTP=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:5001/ 2>/dev/null || echo 'timeout')
 if [ \"\$HTTP\" = '302' ] || [ \"\$HTTP\" = '200' ]; then
-    printf '   %-20s ✅ %s\n' 'pcb-inspect:5001' \"\$HTTP\"
+    printf '   %-20s [OK] %s\n' 'pcb-inspect:5001' \"\$HTTP\"
 else
-    printf '   %-20s ❌ %s\n' 'pcb-inspect:5001' \"\$HTTP\"
+    printf '   %-20s [FAIL] %s\n' 'pcb-inspect:5001' \"\$HTTP\"
 fi
 echo ''
 
 # ── Top processes ──
-echo '🏋️ Top processes by RAM:'
+echo 'Top processes by RAM:'
 ps aux --sort=-%mem | awk 'NR>1 && NR<=6 {printf \"   %-6s %5.1f%% RAM  %s\n\", \$1, \$4, \$11}'
 echo ''
 
 # ── Network connections ──
 CONNS=\$(ss -tun | tail -n +2 | wc -l)
-echo \"🔗 Active connections: \$CONNS\"
+echo \"Active connections: \$CONNS\"
 "

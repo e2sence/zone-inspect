@@ -24,7 +24,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Подождать пока cloudflared подключится
-echo "⏳ Запуск Cloudflare Named Tunnel..."
+echo "Запуск Cloudflare Named Tunnel..."
 for i in {1..15}; do
     sleep 1
     if grep -q 'Registered tunnel connection' /tmp/cloudflared-pcb.log 2>/dev/null; then
@@ -33,7 +33,7 @@ for i in {1..15}; do
 done
 
 if ! grep -q 'Registered tunnel connection' /tmp/cloudflared-pcb.log 2>/dev/null; then
-    echo "⚠️  Tunnel не подключился, проверьте /tmp/cloudflared-pcb.log"
+    echo "WARN: Tunnel не подключился, проверьте /tmp/cloudflared-pcb.log"
 fi
 
 export BASE_URL="$CF_URL"
