@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PCB Inspect — Mobile</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0c10;
+            --card: #111318;
+            --bg2: #161920;
+            --border: #1e222a;
+            --border-light: #2a2f3a;
+            --text: #c9cdd5;
+            --text-bright: #e8eaed;
+            --muted: #6b7280;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --accent-dim: rgba(59, 130, 246, 0.1);
+            --success: #22c55e;
+            --success-dim: rgba(34, 197, 94, 0.1);
+            --warn: #f59e0b;
+            --warn-dim: rgba(245, 158, 11, 0.1);
+            --danger: #ef4444;
+            --danger-dim: rgba(239, 68, 68, 0.1);
+            --radius: 3px;
+            --mono: 'JetBrains Mono', monospace;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box
+        }
+
+        body {
+            font-family: var(--mono);
+            font-size: 12px;
+            line-height: 1.5;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .header {
+            padding: 10px 14px;
+            background: var(--card);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+        }
+
+        .header h1 {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-bright);
+            text-transform: uppercase;
+            letter-spacing: .5px;
+        }
+
+        .header h1::before {
+            content: '■ ';
+            color: var(--accent)
+        }
+
+        .header .sub {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .session-info {
+            padding: 6px 14px;
+            font-size: 12px;
+            color: var(--muted);
+            display: flex;
+            justify-content: space-between;
+            background: var(--bg2);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .mode-tabs {
+            display: flex;
+            gap: 0;
+            margin: 8px 14px;
+            border-radius: var(--radius);
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+
+        .mode-tab {
+            flex: 1;
+            padding: 8px;
+            text-align: center;
+            font-size: 12px;
+            font-weight: 500;
+            font-family: var(--mono);
+            background: var(--card);
+            color: var(--muted);
+            border: none;
+            cursor: pointer;
+            transition: all .15s;
+            text-transform: uppercase;
+            letter-spacing: .3px;
+        }
+
+        .mode-tab.active {
+            background: var(--accent);
+            color: #fff;
+        }
+
+        .content {
+            flex: 1;
+            padding: 10px 14px;
+        }
+
+        /* Capture areas */
+        .capture-area {
+            background: #000;
+            border-radius: var(--radius);
+            overflow: hidden;
+            position: relative;
+            aspect-ratio: 4/3;
+            margin-bottom: 8px;
+            border: 1px solid var(--border);
+        }
+
+        .capture-area video,
+        .capture-area canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .capture-area canvas {
+            display: none
+        }
+
+        /* Scan overlay */
+        .scan-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .scan-reticle {
+            width: 70%;
+            height: 50%;
+            border: 2px solid var(--accent);
+            border-radius: var(--radius);
+            position: relative;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, .35);
+        }
+
+        .scan-reticle.found {
+            border-color: var(--success);
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, .35), 0 0 20px var(--success);
+        }
+
+        .scan-label {
+            position: absolute;
+            bottom: -24px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 12px;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: .5px;
+        }
+
+        .scan-reticle.found .scan-label {
+            color: var(--success)
+        }
+
+        .scan-line {
+            position: absolute;
+            left: 4px;
+            right: 4px;
+            height: 2px;
+            background: var(--accent);
+            opacity: .7;
+            animation: scanMove 2s ease-in-out infinite;
+        }
+
+        @keyframes scanMove {
+
+            0%,
+            100% {
+                top: 10%
+            }
+
+            50% {
+                top: 90%
+            }
+        }
+
+        /* Buttons */
+        .btn {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 12px;
+            font-weight: 600;
+            font-family: var(--mono);
+            cursor: pointer;
+            transition: all .15s;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: .3px;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-hover)
+        }
+
+        .btn-primary:disabled {
+            opacity: .35;
+            cursor: not-allowed
+        }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--accent);
+            border: 1px solid var(--accent);
+        }
+
+        .btn-file {
+            background: var(--bg2);
+            color: var(--text);
+            border: 1px dashed var(--border-light);
+        }
+
+        /* Result boxes */
+        .result-box {
+            padding: 8px 10px;
+            border-radius: var(--radius);
+            font-size: 12px;
+            margin-bottom: 6px;
+            border: 1px solid;
+        }
+
+        .result-ok {
+            background: var(--success-dim);
+            border-color: var(--success);
+            color: var(--success);
+        }
+
+        .result-err {
+            background: var(--danger-dim);
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+
+        .result-info {
+            background: var(--accent-dim);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 1.5px solid rgba(255, 255, 255, .3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin .6s linear infinite;
+            vertical-align: middle;
+            margin-right: 4px;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg)
+            }
+        }
+
+        /* Anchor overlay */
+        .anchor-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: block !important;
+        }
+
+        .anchor-status {
+            padding: 4px 8px;
+            font-size: 12px;
+            text-align: center;
+            color: var(--warn);
+            text-transform: uppercase;
+            letter-spacing: .3px;
+        }
+
+        .anchor-status.aligned {
+            color: var(--success);
+        }
+
+        .zone-nav {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 6px 0;
+        }
+
+        .zone-nav-btn {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text);
+            border-radius: 6px;
+            width: 32px;
+            height: 32px;
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .zone-nav-btn:disabled {
+            opacity: .3;
+        }
+
+        .zone-nav-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--accent);
+            min-width: 120px;
+            text-align: center;
+        }
+
+        .zone-nav-label .zone-checked {
+            color: var(--success);
+            font-size: 11px;
+        }
+
+        .hidden {
+            display: none !important
+        }
+
+        .photo-count {
+            text-align: center;
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--accent);
+            margin: 12px 0 2px;
+        }
+
+        .photo-count-label {
+            text-align: center;
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: .4px;
+        }
+
+        .file-input-wrap {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .file-input-wrap input[type=file] {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <h1>PCB Inspect</h1>
+        <span class="sub" id="header-sub">Loading...</span>
+    </div>
+    <div class="session-info">
+        <span id="info-session">—</span>
+        <span id="info-status">—</span>
+    </div>
+
+    <div class="mode-tabs">
+        <button class="mode-tab active" id="tab-serial" onclick="switchMode('serial')">Serial</button>
+        <button class="mode-tab" id="tab-zone" onclick="switchMode('zone')">Zone Photos</button>
+    </div>
+
+    <div class="content">
+        <!-- Serial Number Mode -->
+        <div id="serial-mode">
+            <div class="capture-area" id="serial-capture-area">
+                <video id="serial-video" autoplay playsinline></video>
+                <canvas id="serial-canvas"></canvas>
+                <div class="scan-overlay">
+                    <div class="scan-reticle" id="scan-reticle">
+                        <div class="scan-line"></div>
+                        <div class="scan-label" id="scan-label">Scanning...</div>
+                    </div>
+                </div>
+            </div>
+            <div id="serial-result-mobile" class="hidden"></div>
+            <div class="file-input-wrap">
+                <button class="btn btn-file">Choose from Gallery</button>
+                <input type="file" accept="image/*" id="file-serial-mobile" onchange="uploadSerialFile(this)">
+            </div>
+        </div>
+
+        <!-- Zone Photo Mode -->
+        <div id="zone-mode" class="hidden">
+            <div class="zone-nav" id="zone-nav">
+                <button class="zone-nav-btn" id="zone-prev" onclick="navZone(-1)">&larr;</button>
+                <div class="zone-nav-label" id="zone-nav-label">Zone 1</div>
+                <button class="zone-nav-btn" id="zone-next" onclick="navZone(1)">&rarr;</button>
+            </div>
+            <div class="capture-area" id="zone-capture-area">
+                <video id="zone-video" autoplay playsinline></video>
+                <canvas id="zone-canvas"></canvas>
+                <canvas class="anchor-overlay" id="anchor-overlay"></canvas>
+            </div>
+            <div class="anchor-status hidden" id="anchor-status">Align anchors...</div>
+            <button class="btn btn-primary" id="btn-zone-capture" onclick="captureZone()">
+                Capture Zone
+            </button>
+            <div class="file-input-wrap">
+                <button class="btn btn-file">Choose from Gallery (multiple)</button>
+                <input type="file" accept="image/*" multiple id="file-zone-mobile" onchange="uploadZoneFiles(this)">
+            </div>
+            <div class="photo-count" id="zone-photo-count">0</div>
+            <div class="photo-count-label">photos sent</div>
+            <div id="zone-result-mobile"></div>
+            <div id="mobile-action-btns" class="hidden"
+                style="margin-top:8px;display:flex;gap:8px;justify-content:center">
+                <button class="btn btn-primary" id="btn-mobile-skip" onclick="mobileSkipBoard()"
+                    style="background:#f59e0b;color:#000;font-weight:600;padding:8px 16px;border-radius:6px;font-size:14px">Skip
+                    &rarr; New SN</button>
+                <button class="btn" id="btn-mobile-retry" onclick="mobileRetryFailed()"
+                    style="background:transparent;border:1px solid #6366f1;color:#6366f1;padding:8px 16px;border-radius:6px;font-size:14px">Retry
+                    Failed</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let TOKEN = '';
+        let SESSION_ID = '';
+        let BASE_URL = '';
+        let serialStream = null;
+        let zoneStream = null;
+        let photosSent = 0;
+        let zonesTotal = 0;
+        let zonesChecked = 0;
+        let hasSerial = false;
+
+        // Continuous scan state
+        let scanning = false;
+        let scanTimer = null;
+        let scanBusy = false;
+        let nativeBarcodeDetector = null;
+
+        // ═══════════════════════════════════════════════════════════
+        //  SCANNER BEEP SOUND (Web Audio API)
+        // ═══════════════════════════════════════════════════════════
+        let _audioCtx = null;
+        function playBeep() {
+            try {
+                if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const ctx = _audioCtx;
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(1800, ctx.currentTime);
+                osc.frequency.setValueAtTime(1400, ctx.currentTime + 0.08);
+                gain.gain.setValueAtTime(0.3, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+                osc.start(ctx.currentTime);
+                osc.stop(ctx.currentTime + 0.15);
+            } catch (e) { /* audio not supported */ }
+        }
+        function playShutter() {
+            try {
+                if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const ctx = _audioCtx;
+                const buf = ctx.createBuffer(1, ctx.sampleRate * 0.1, ctx.sampleRate);
+                const data = buf.getChannelData(0);
+                for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.02));
+                const src = ctx.createBufferSource();
+                src.buffer = buf;
+                const gain = ctx.createGain();
+                gain.gain.setValueAtTime(0.15, ctx.currentTime);
+                src.connect(gain);
+                gain.connect(ctx.destination);
+                src.start();
+            } catch (e) { /* audio not supported */ }
+        }
+
+        // Anchor state
+        let anchorRefs = [];       // [{x,y}] — current zone's reference anchor positions
+        let anchorDetecting = false;
+        let anchorTimer = null;
+        let anchorBusy = false;
+
+        // Zone navigation state
+        let zonesInfo = [];        // [{label, anchors, checked, status}] from backend
+        let currentZoneIdx = 0;    // which zone is shown
+        let lastInspectionState = 'scanning'; // track to avoid repeating actions
+        let actionInProgress = false; // blocks poll during skip/retry transition
+        let skipActive = false; // after skip, ignore server state until session changes
+        let retryActive = false; // keep buttons visible while rescanning after retry
+        let lastBoardSeq = 0; // tracks completed boards to detect completion after desktop reset
+
+        function init() {
+            const params = new URLSearchParams(window.location.search);
+            TOKEN = params.get('token') || '';
+            if (!TOKEN) {
+                document.getElementById('header-sub').textContent = '❌ Token not found';
+                return;
+            }
+            BASE_URL = window.location.origin;
+
+            // Check for native BarcodeDetector API
+            if ('BarcodeDetector' in window) {
+                BarcodeDetector.getSupportedFormats().then(formats => {
+                    if (formats.length > 0) {
+                        nativeBarcodeDetector = new BarcodeDetector({ formats });
+                        console.log('Native BarcodeDetector:', formats.join(', '));
+                    }
+                }).catch(() => { });
+            }
+
+            fetchSessionInfo();
+        }
+
+        async function fetchSessionInfo() {
+            try {
+                const r = await fetch(`${BASE_URL}/api/mobile/${TOKEN}/info`);
+                if (r.status === 404) {
+                    clearInterval(bgPollTimer);
+                    bgPollTimer = null;
+                    document.getElementById('header-sub').textContent = '❌ Link expired — scan QR again';
+                    return;
+                }
+                const d = await r.json();
+                if (d.error) {
+                    document.getElementById('header-sub').textContent = '❌ ' + d.error;
+                    return;
+                }
+                SESSION_ID = d.session_id;
+                zonesTotal = d.zones_total;
+                zonesChecked = d.zones_checked;
+                hasSerial = !!d.serial;
+                // Store per-zone info with anchors
+                zonesInfo = d.zones || [];
+                // Go to first unchecked zone
+                currentZoneIdx = zonesInfo.findIndex(z => !z.checked);
+                if (currentZoneIdx < 0) currentZoneIdx = 0;
+                anchorRefs = (zonesInfo[currentZoneIdx] || {}).anchors || [];
+                updateZoneNav();
+                updateStatusUI(d);
+                lastBoardSeq = d.board_seq || 0;
+
+                if (d.serial) {
+                    document.getElementById('serial-result-mobile').innerHTML =
+                        `<div class="result-box result-ok">Serial: <strong>${d.serial}</strong></div>`;
+                    document.getElementById('serial-result-mobile').classList.remove('hidden');
+                    switchMode('zone');
+                } else {
+                    switchMode('serial');
+                }
+            } catch (e) {
+                document.getElementById('header-sub').textContent = '❌ Error: ' + e.message;
+            }
+        }
+
+        function updateStatusUI(d) {
+            const total = d ? d.zones_total : zonesTotal;
+            const checked = d ? d.zones_checked : zonesChecked;
+            document.getElementById('header-sub').textContent = `Session active · ${total} zones`;
+            document.getElementById('info-session').textContent = `ID: ${SESSION_ID.slice(0, 8)}`;
+            document.getElementById('info-status').textContent = `Checked: ${checked}/${total}`;
+        }
+
+        function switchMode(mode) {
+            stopScan();
+            stopAnchorDetect();
+            document.getElementById('tab-serial').classList.toggle('active', mode === 'serial');
+            document.getElementById('tab-zone').classList.toggle('active', mode === 'zone');
+            document.getElementById('serial-mode').classList.toggle('hidden', mode !== 'serial');
+            document.getElementById('zone-mode').classList.toggle('hidden', mode !== 'zone');
+            startCamera(mode).then(() => {
+                if (mode === 'serial') startScan();
+                if (mode === 'zone') {
+                    updateZoneNav();
+                    drawReferenceAnchors();
+                    if (anchorRefs.length > 0) startAnchorDetect();
+                }
+            });
+        }
+
+        async function startCamera(mode) {
+            const videoId = mode === 'serial' ? 'serial-video' : 'zone-video';
+            const video = document.getElementById(videoId);
+
+            if (mode === 'serial' && zoneStream) {
+                zoneStream.getTracks().forEach(t => t.stop());
+                zoneStream = null;
+            } else if (mode === 'zone' && serialStream) {
+                serialStream.getTracks().forEach(t => t.stop());
+                serialStream = null;
+            }
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: { ideal: 'environment' },
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 },
+                    },
+                    audio: false
+                });
+                const track = stream.getVideoTracks()[0];
+                const caps = track.getCapabilities ? track.getCapabilities() : {};
+                if (caps.focusMode && caps.focusMode.includes('continuous')) {
+                    await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+                }
+                video.srcObject = stream;
+                await video.play();
+                if (mode === 'serial') serialStream = stream;
+                else zoneStream = stream;
+            } catch (e) {
+                console.warn('Camera error:', e);
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        //  CONTINUOUS BARCODE SCANNING
+        // ═══════════════════════════════════════════════════════════
+
+        function startScan() {
+            if (scanning) return;
+            scanning = true;
+            scanBusy = false;
+            const reticle = document.getElementById('scan-reticle');
+            const label = document.getElementById('scan-label');
+            reticle.classList.remove('found');
+            label.textContent = 'Scanning...';
+            scanLoop();
+        }
+
+        function stopScan() {
+            scanning = false;
+            if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
+        }
+
+        function scanLoop() {
+            if (!scanning) return;
+            scanTimer = setTimeout(async () => {
+                if (!scanning) return;
+                if (!scanBusy) {
+                    await scanFrame();
+                }
+                scanLoop();
+            }, nativeBarcodeDetector ? 100 : 500);
+        }
+
+        async function scanFrame() {
+            const video = document.getElementById('serial-video');
+            if (!video.videoWidth || !video.videoHeight) return;
+
+            // Try native BarcodeDetector first (instant, no network)
+            if (nativeBarcodeDetector) {
+                try {
+                    const results = await nativeBarcodeDetector.detect(video);
+                    if (results.length > 0) {
+                        const best = results.find(r => r.rawValue) || results[0];
+                        if (best.rawValue) {
+                            onBarcodeFound(best.rawValue, 'native');
+                            return;
+                        }
+                    }
+                } catch (e) { /* fallback to server */ }
+            }
+
+            // Fallback: server-side detection (throttled)
+            scanBusy = true;
+            try {
+                const blob = await grabFrame();
+                if (!blob) { scanBusy = false; return; }
+                const fd = new FormData();
+                fd.append('photo', blob, 'scan.jpg');
+                const r = await fetch(`${BASE_URL}/api/mobile/${TOKEN}/serial`, {
+                    method: 'POST', body: fd
+                });
+                const d = await r.json();
+                if (!d.error && d.serial) {
+                    onBarcodeFound(d.serial, d.type);
+                }
+            } catch (e) { /* ignore, retry next frame */ }
+            scanBusy = false;
+        }
+
+        function grabFrame() {
+            const video = document.getElementById('serial-video');
+            const canvas = document.getElementById('serial-canvas');
+            const vw = video.videoWidth, vh = video.videoHeight;
+            if (!vw || !vh) return null;
+
+            const dispW = video.clientWidth, dispH = video.clientHeight;
+            const videoRatio = vw / vh, dispRatio = dispW / dispH;
+            let sx = 0, sy = 0, sw = vw, sh = vh;
+            if (videoRatio > dispRatio) {
+                sw = Math.round(vh * dispRatio);
+                sx = Math.round((vw - sw) / 2);
+            } else {
+                sh = Math.round(vw / dispRatio);
+                sy = Math.round((vh - sh) / 2);
+            }
+            const maxDim = 2048;
+            let outW = sw, outH = sh;
+            if (Math.max(sw, sh) > maxDim) {
+                const s = maxDim / Math.max(sw, sh);
+                outW = Math.round(sw * s);
+                outH = Math.round(sh * s);
+            }
+            canvas.width = outW;
+            canvas.height = outH;
+            canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, outW, outH);
+            return new Promise(resolve => {
+                canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.90);
+            });
+        }
+
+        async function onBarcodeFound(rawValue, type) {
+            stopScan();
+            playBeep();
+            const reticle = document.getElementById('scan-reticle');
+            const label = document.getElementById('scan-label');
+            reticle.classList.add('found');
+            label.textContent = 'Found!';
+
+            // If detected natively, register with server
+            if (type === 'native') {
+                const resultDiv = document.getElementById('serial-result-mobile');
+                resultDiv.innerHTML = `<div class="result-box result-info"><span class="spinner"></span> Verifying...</div>`;
+                resultDiv.classList.remove('hidden');
+                try {
+                    const blob = await grabFrame();
+                    const fd = new FormData();
+                    fd.append('photo', blob, 'scan.jpg');
+                    const r = await fetch(`${BASE_URL}/api/mobile/${TOKEN}/serial`, {
+                        method: 'POST', body: fd
+                    });
+                    const d = await r.json();
+                    if (!d.error && d.serial) {
+                        resultDiv.innerHTML = `<div class="result-box result-ok">Serial: <strong>${d.serial}</strong> (${d.type})</div>`;
+                        hasSerial = true;
+                        setTimeout(() => switchMode('zone'), 800);
+                        return;
+                    }
+                } catch (e) { /* use native value */ }
+                // Couldn't verify — restart scanning
+                resultDiv.innerHTML = `<div class="result-box result-err">❌ Could not verify. Retrying...</div>`;
+                setTimeout(() => { reticle.classList.remove('found'); startScan(); }, 1500);
+                return;
+            }
+
+            // Server-detected barcode — already registered
+            const resultDiv = document.getElementById('serial-result-mobile');
+            resultDiv.innerHTML = `<div class="result-box result-ok">Serial: <strong>${rawValue}</strong> (${type})</div>`;
+            resultDiv.classList.remove('hidden');
+            hasSerial = true;
+            setTimeout(() => switchMode('zone'), 800);
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        //  FILE UPLOAD (serial)
+        // ═══════════════════════════════════════════════════════════
+
+        async function uploadSerialFile(input) {
+            if (!input.files.length) return;
+            stopScan();
+            const resultDiv = document.getElementById('serial-result-mobile');
+            resultDiv.innerHTML = `<div class="result-box result-info"><span class="spinner"></span> Reading…</div>`;
+            resultDiv.classList.remove('hidden');
+
+            try {
+                const fd = new FormData();
+                fd.append('photo', input.files[0]);
+                const r = await fetch(`${BASE_URL}/api/mobile/${TOKEN}/serial`, { method: 'POST', body: fd });
+                const d = await r.json();
+                if (d.error) {
+                    resultDiv.innerHTML = `<div class="result-box result-err">❌ ${d.error}</div>`;
+                    startScan();
+                } else {
+                    resultDiv.innerHTML = `<div class="result-box result-ok">Serial: <strong>${d.serial}</strong> (${d.type})</div>`;
+                    hasSerial = true;
+                    setTimeout(() => switchMode('zone'), 800);
+                }
+            } catch (e) {
+                resultDiv.innerHTML = `<div class="result-box result-err">❌ ${e.message}</div>`;
+                startScan();
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        //  ZONE NAVIGATION
+        // ═══════════════════════════════════════════════════════════
+
+        function navZone(delta) {
+            const newIdx = currentZoneIdx + delta;
+            if (newIdx < 0 || newIdx >= zonesInfo.length) return;
+            currentZoneIdx = newIdx;
+            anchorRefs = (zonesInfo[currentZoneIdx] || {}).anchors || [];
+            updateZoneNav();
+            // Restart anchor detection for new zone
+            stopAnchorDetect();
+            drawReferenceAnchors();
+            if (anchorRefs.length > 0) startAnchorDetect();
+        }
+
+        function updateZoneNav() {
+            if (!zonesInfo.length) return;
+            const zi = zonesInfo[currentZoneIdx] || {};
+            const label = document.getElementById('zone-nav-label');
+            const checkedMark = zi.checked ? ' <span class="zone-checked">✓</span>' : '';
+            label.innerHTML = `${zi.label || 'Zone ' + (currentZoneIdx + 1)}${checkedMark} <span style="opacity:.5;font-size:11px">${currentZoneIdx + 1}/${zonesInfo.length}</span>`;
+            document.getElementById('zone-prev').disabled = currentZoneIdx <= 0;
+            document.getElementById('zone-next').disabled = currentZoneIdx >= zonesInfo.length - 1;
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        //  ANCHOR POINT DETECTION (zone mode overlay)
+        // ═══════════════════════════════════════════════════════════
+
+        function startAnchorDetect() {
+            if (anchorDetecting || anchorRefs.length === 0) return;
+            anchorDetecting = true;
+            anchorBusy = false;
+            document.getElementById('anchor-status').classList.remove('hidden');
+            document.getElementById('anchor-status').textContent = 'Align anchors...';
+            anchorLoop();
+        }
+
+        function drawReferenceAnchors() {
+            const area = document.getElementById('zone-capture-area');
+            const overlay = document.getElementById('anchor-overlay');
+            if (!area || !overlay) return;
+            const aw = area.clientWidth, ah = area.clientHeight;
+            if (!aw || !ah) return;
+            overlay.width = aw;
+            overlay.height = ah;
+            const ctx = overlay.getContext('2d');
+            ctx.clearRect(0, 0, aw, ah);
+            if (!anchorRefs || anchorRefs.length === 0) return;
+            const colors = ['#f59e0b', '#3b82f6'];
+            anchorRefs.forEach((ref, i) => {
+                const rx = ref.x * aw, ry = ref.y * ah;
+                ctx.setLineDash([4, 4]);
+                ctx.strokeStyle = colors[i % 2];
+                ctx.lineWidth = 1.5;
+                ctx.globalAlpha = 0.5;
+                ctx.beginPath(); ctx.arc(rx, ry, 16, 0, Math.PI * 2); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(rx - 10, ry); ctx.lineTo(rx + 10, ry); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(rx, ry - 10); ctx.lineTo(rx, ry + 10); ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.globalAlpha = 1;
+                ctx.fillStyle = colors[i % 2];
+                ctx.font = 'bold 11px monospace';
+                ctx.fillText('A' + (i + 1), rx + 18, ry - 6);
+            });
+            // Show status
+            const statusEl = document.getElementById('anchor-status');
+            if (anchorRefs.length > 0 && !anchorDetecting) {
+                const zName = (zonesInfo[currentZoneIdx] || {}).label || '';
+                statusEl.textContent = zName + ' · ' + anchorRefs.length + ' anchors';
+                statusEl.className = 'anchor-status';
+                statusEl.classList.remove('hidden');
+            }
+        }
+
+        function stopAnchorDetect() {
+            anchorDetecting = false;
+            if (anchorTimer) { clearTimeout(anchorTimer); anchorTimer = null; }
+            const overlay = document.getElementById('anchor-overlay');
+            if (overlay) {
+                const ctx = overlay.getContext('2d');
+                ctx.clearRect(0, 0, overlay.width, overlay.height);
+            }
+            document.getElementById('anchor-status').classList.add('hidden');
+        }
+
+        function anchorLoop() {
+            if (!anchorDetecting) return;
+            if (!anchorBusy) {
+                anchorBusy = true;
+                detectAnchorsFrame().finally(() => {
+                    anchorBusy = false;
+                    if (anchorDetecting) anchorTimer = setTimeout(anchorLoop, 300);
+                });
+            } else {
+                anchorTimer = setTimeout(anchorLoop, 100);
+            }
+        }
+
+        async function detectAnchorsFrame() {
+            const video = document.getElementById('zone-video');
+            if (!video.videoWidth || !video.videoHeight) return;
+
+            // Grab a small frame for anchor detection
+            const tmpCanvas = document.createElement('canvas');
+            const vw = video.videoWidth, vh = video.videoHeight;
+            const maxDim = 640;
+            const s = Math.min(maxDim / Math.max(vw, vh), 1);
+            tmpCanvas.width = Math.round(vw * s);
+            tmpCanvas.height = Math.round(vh * s);
+            tmpCanvas.getContext('2d').drawImage(video, 0, 0, tmpCanvas.width, tmpCanvas.height);
+
+            const blob = await new Promise(r => tmpCanvas.toBlob(b => r(b), 'image/jpeg', 0.7));
+            if (!blob) return;
+
+            try {
+                const fd = new FormData();
+                fd.append('photo', blob, 'anchor.jpg');
+                fd.append('zone_index', currentZoneIdx);
+                const r = await fetch(`${BASE_URL}/api/mobile/${TOKEN}/detect_anchors`, {
+                    method: 'POST', body: fd
+                });
+                const d = await r.json();
+                drawAnchorOverlay(d.anchors || []);
+            } catch (e) { /* ignore, retry */ }
+        }
+
+        function drawAnchorOverlay(detected) {
+            const area = document.getElementById('zone-capture-area');
+            const overlay = document.getElementById('anchor-overlay');
+            const aw = area.clientWidth, ah = area.clientHeight;
+            overlay.width = aw;
+            overlay.height = ah;
+            const ctx = overlay.getContext('2d');
+            ctx.clearRect(0, 0, aw, ah);
+
+            const colors = ['#f59e0b', '#3b82f6'];
+            let allFound = true;
+
+            // Draw reference target positions (where anchors SHOULD be)
+            anchorRefs.forEach((ref, i) => {
+                const rx = ref.x * aw, ry = ref.y * ah;
+                ctx.setLineDash([4, 4]);
+                ctx.strokeStyle = colors[i % 2];
+                ctx.lineWidth = 1.5;
+                ctx.globalAlpha = 0.5;
+                ctx.beginPath(); ctx.arc(rx, ry, 16, 0, Math.PI * 2); ctx.stroke();
+                // Target crosshair
+                ctx.beginPath(); ctx.moveTo(rx - 10, ry); ctx.lineTo(rx + 10, ry); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(rx, ry - 10); ctx.lineTo(rx, ry + 10); ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.globalAlpha = 1;
+
+                // Draw label
+                ctx.fillStyle = colors[i % 2];
+                ctx.font = 'bold 11px monospace';
+                ctx.fillText('A' + (i + 1), rx + 18, ry - 6);
+            });
+
+            // Draw detected positions (where anchors ARE found)
+            detected.forEach((det, i) => {
+                if (!det || i >= anchorRefs.length) {
+                    allFound = false;
+                    return;
+                }
+                const dx = det.x * aw, dy = det.y * ah;
+                const score = det.score || 0;
+                const ref = anchorRefs[i];
+                const rx = ref.x * aw, ry = ref.y * ah;
+                const dist = Math.sqrt((dx - rx) ** 2 + (dy - ry) ** 2);
+                const aligned = dist <= 15;
+                if (!aligned) allFound = false;
+
+                // Detected circle + crosshair (solid, green if aligned, orange/blue if not)
+                const c = aligned ? '#22c55e' : (score > 0.5 ? '#22c55e' : colors[i % 2]);
+                ctx.strokeStyle = c;
+                ctx.lineWidth = 2.5;
+                ctx.setLineDash([]);
+                ctx.globalAlpha = 0.9;
+                ctx.beginPath(); ctx.arc(dx, dy, 14, 0, Math.PI * 2); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(dx - 8, dy); ctx.lineTo(dx + 8, dy); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(dx, dy - 8); ctx.lineTo(dx, dy + 8); ctx.stroke();
+                ctx.globalAlpha = 1;
+
+                // Label
+                ctx.fillStyle = c;
+                ctx.font = 'bold 11px monospace';
+                ctx.fillText(aligned ? '✓' : 'A' + (i + 1), dx + 16, dy - 4);
+            });
+
+            // Update status
+            const statusEl = document.getElementById('anchor-status');
+            const zName = (zonesInfo[currentZoneIdx] || {}).label || '';
+            if (allFound && detected.filter(d => d).length === anchorRefs.length) {
+                statusEl.textContent = '✓ ' + zName + ' aligned — capture';
+                statusEl.className = 'anchor-status aligned';
+            } else {
+                const found = detected.filter(d => d).length;
+                statusEl.textContent = zName + ' · ' + found + '/' + anchorRefs.length + ' anchors';
+                statusEl.className = 'anchor-status';
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        //  ZONE PHOTOS
+        // ═══════════════════════════════════════════════════════════
+
+        function captureFrame(videoId, canvasId) {
+            const video = document.getElementById(videoId);
+            const canvas = document.getElementById(canvasId);
+            const vw = video.videoWidth, vh = video.videoHeight;
+            if (!vw || !vh) return Promise.reject(new Error('Camera not ready.'));
+            const dispW = video.clientWidth, dispH = video.clientHeight;
+            const videoRatio = vw / vh, dispRatio = dispW / dispH;
+            let sx = 0, sy = 0, sw = vw, sh = vh;
+            if (videoRatio > dispRatio) {
+                sw = Math.round(vh * dispRatio);
+                sx = Math.round((vw - sw) / 2);
+            } else {
+                sh = Math.round(vw / dispRatio);
+                sy = Math.round((vh - sh) / 2);
+            }
+            const maxDim = 2048;
+            let outW = sw, outH = sh;
+            if (Math.max(sw, sh) > maxDim) {
+                const s = maxDim / Math.max(sw, sh);
+                outW = Math.round(sw * s);
+                outH = Math.round(sh * s);
+            }
+            canvas.width = outW;
+            canvas.height = outH;
+            canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, outW, outH);
+            return new Promise((resolve, reject) => {
+                canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Capture failed')), 'image/jpeg', 0.92);
+            });
+        }
+
+        let capturedThumbs = []; // [{url, name}]
+
+        async function captureZone() {
+            const btn = document.getElementById('btn-zone-capture');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Sending…';
+            try {
+                const blob = await captureFrame('zone-video', 'zone-canvas');
+                playBeep();
+                // Save thumbnail for badge
+                const thumbUrl = URL.createObjectURL(blob.slice(0, blob.size, blob.type));
+                capturedThumbs.push({ url: thumbUrl, name: (zonesInfo[currentZoneIdx] || {}).label || `Zone ${currentZoneIdx + 1}` });
+                updatePhotoBadge();
+                await sendZonePhoto(blob, 'zone.jpg');
+            } catch (e) {
+                showZoneResult(`❌ ${e.message}`, 'err');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'Capture Zone';
+            }
+        }
+
+        function updatePhotoBadge() {
+            let badge = document.getElementById('photo-badge');
+            if (!badge) {
+                badge = document.createElement('div');
+                badge.id = 'photo-badge';
+                badge.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:100;background:var(--card);border:2px solid var(--accent);border-radius:8px;padding:4px;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 2px 12px rgba(0,0,0,.5)';
+                badge.onclick = downloadCapturedPhotos;
+                document.body.appendChild(badge);
+            }
+            const last = capturedThumbs[capturedThumbs.length - 1];
+            badge.innerHTML = `<img src="${last.url}" style="width:40px;height:40px;object-fit:cover;border-radius:4px"><span style="font-size:11px;color:var(--text-bright);padding-right:6px">${capturedThumbs.length} 📷</span>`;
+        }
+
+        function downloadCapturedPhotos() {
+            capturedThumbs.forEach((t, i) => {
+                const a = document.createElement('a');
+                a.href = t.url;
+                a.download = `capture_${i + 1}.jpg`;
+                a.click();
+            });
+        }
+
+        async function uploadZoneFiles(input) {
+            if (!input.files.length) return;
+            for (const file of input.files) {
+                await sendZonePhoto(file, file.name);
+            }
+        }
+
+        async function sendZonePhoto(blob, name) {
+            try {
+                const fd = new FormData();
+                fd.append('photo', blob, name);
+                const r = await fetch(`${BASE_URL}/api/mobile/${TOKEN}/zone_photo`, { method: 'POST', body: fd });
+                const d = await r.json();
+                if (d.error) {
+                    showZoneResult(`❌ ${d.error}`, 'err');
+                } else {
+                    photosSent++;
+                    document.getElementById('zone-photo-count').textContent = photosSent;
+                    showZoneResult(`Photo #${photosSent} uploaded`, 'ok');
+                    await pollProgress();
+                }
+            } catch (e) {
+                showZoneResult(`❌ ${e.message}`, 'err');
+            }
+        }
+
+        async function pollProgress() {
+            if (actionInProgress) return;
+            try {
+                const r = await fetch(`${BASE_URL}/api/mobile/${TOKEN}/info`);
+                if (r.status === 404) {
+                    clearInterval(bgPollTimer);
+                    bgPollTimer = null;
+                    document.getElementById('header-sub').textContent = '❌ Link expired — scan QR again';
+                    return;
+                }
+                const d = await r.json();
+                if (d.error) return;
+
+                // Detect session change — desktop switched to new serial
+                if (d.session_id && d.session_id !== SESSION_ID) {
+                    SESSION_ID = d.session_id;
+                    hasSerial = !!d.serial;
+                    photosSent = 0;
+                    document.getElementById('zone-photo-count').textContent = '0';
+                    document.getElementById('zone-result-mobile').innerHTML = '';
+                    document.getElementById('mobile-action-btns').classList.add('hidden');
+                    lastInspectionState = 'scanning';
+                    lastBoardSeq = d.board_seq || 0;
+                    skipActive = false;
+                    retryActive = false;
+                    zonesInfo = d.zones || [];
+                    zonesTotal = d.zones_total;
+                    zonesChecked = d.zones_checked;
+                    currentZoneIdx = zonesInfo.findIndex(z => !z.checked);
+                    if (currentZoneIdx < 0) currentZoneIdx = 0;
+                    anchorRefs = (zonesInfo[currentZoneIdx] || {}).anchors || [];
+                    updateZoneNav();
+                    updateStatusUI(d);
+                    stopAnchorDetect();
+                    if (d.serial) {
+                        document.getElementById('serial-result-mobile').innerHTML =
+                            `<div class="result-box result-ok">Serial: <strong>${d.serial}</strong></div>`;
+                        document.getElementById('serial-result-mobile').classList.remove('hidden');
+                        switchMode('zone');
+                    } else {
+                        document.getElementById('serial-result-mobile').innerHTML = '';
+                        document.getElementById('serial-result-mobile').classList.add('hidden');
+                        switchMode('serial');
+                    }
+                    return;
+                }
+
+                zonesTotal = d.zones_total;
+                zonesChecked = d.zones_checked;
+                // Update per-zone checked status
+                if (d.zones && d.zones.length) {
+                    zonesInfo = d.zones;
+                    updateZoneNav();
+                    // Auto-advance to next unchecked zone
+                    const nextUnchecked = zonesInfo.findIndex(z => !z.checked);
+                    if (nextUnchecked >= 0 && nextUnchecked !== currentZoneIdx) {
+                        currentZoneIdx = nextUnchecked;
+                        anchorRefs = (zonesInfo[currentZoneIdx] || {}).anchors || [];
+                        updateZoneNav();
+                        stopAnchorDetect();
+                        drawReferenceAnchors();
+                        if (anchorRefs.length > 0) startAnchorDetect();
+                    }
+                }
+                updateStatusUI(d);
+
+                // Detect board completion via sequence number (survives desktop reset)
+                const boardSeq = d.board_seq || 0;
+                if (boardSeq > lastBoardSeq) {
+                    lastBoardSeq = boardSeq;
+                    if (lastInspectionState !== 'complete' && !skipActive) {
+                        // Board was just completed (or skipped) — switch to serial
+                        lastInspectionState = 'complete';
+                        retryActive = false;
+                        const actionBtns = document.getElementById('mobile-action-btns');
+                        actionBtns.classList.add('hidden');
+                        showZoneResult('Board done ✓ — switching to Serial', 'ok');
+                        hasSerial = false;
+                        photosSent = 0;
+                        document.getElementById('zone-photo-count').textContent = '0';
+                        setTimeout(() => {
+                            document.getElementById('serial-result-mobile').innerHTML = '';
+                            document.getElementById('serial-result-mobile').classList.add('hidden');
+                            document.getElementById('zone-result-mobile').innerHTML = '';
+                            switchMode('serial');
+                        }, 1500);
+                    }
+                    return;
+                }
+
+                // Handle inspection completion based on state
+                if (skipActive) return; // user pressed Skip — ignore server state until session changes
+                const state = d.inspection_state;
+                const actionBtns = document.getElementById('mobile-action-btns');
+                if (state === 'complete' && lastInspectionState !== 'complete') {
+                    // All zones OK — save result, then switch to SN for next board
+                    lastInspectionState = 'complete';
+                    retryActive = false;
+                    actionBtns.classList.add('hidden');
+                    showZoneResult('All zones OK ✓ — saving & switching to Serial', 'ok');
+                    // Save result + clear session for next board
+                    try {
+                        await fetch(`${BASE_URL}/api/mobile/${TOKEN}/skip`, { method: 'POST' });
+                        console.log('[AUTO-SAVE] result saved on complete');
+                    } catch (e) { console.warn('[AUTO-SAVE] failed:', e); }
+                    hasSerial = false;
+                    lastBoardSeq++;
+                    photosSent = 0;
+                    document.getElementById('zone-photo-count').textContent = '0';
+                    setTimeout(() => {
+                        document.getElementById('serial-result-mobile').innerHTML = '';
+                        document.getElementById('serial-result-mobile').classList.add('hidden');
+                        document.getElementById('zone-result-mobile').innerHTML = '';
+                        switchMode('serial');
+                    }, 1500);
+                } else if (state === 'waiting_decision' && lastInspectionState !== 'waiting_decision') {
+                    // All zones checked — waiting for user action (issues or auto-accept off)
+                    lastInspectionState = 'waiting_decision';
+                    retryActive = false;
+                    const issues = (d.zones || []).filter(z => z.status === 'warn' || z.status === 'defect');
+                    if (issues.length) {
+                        const issueLabels = issues.map(z => z.label).join(', ');
+                        showZoneResult(`⚠ Issues in: ${issueLabels} — choose action below`, 'err');
+                    } else {
+                        showZoneResult('✓ All zones OK — waiting for desktop review', 'ok');
+                    }
+                    actionBtns.classList.remove('hidden');
+                } else if (state === 'scanning') {
+                    lastInspectionState = 'scanning';
+                    if (!retryActive) actionBtns.classList.add('hidden');
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        async function mobileSkipBoard() {
+            console.log('[SKIP] mobileSkipBoard called');
+            actionInProgress = true;
+            skipActive = true;
+            document.getElementById('mobile-action-btns').classList.add('hidden');
+            showZoneResult('Saving & skipping board...', 'ok');
+
+            // Save result + clear session on backend
+            try {
+                const resp = await fetch(`${BASE_URL}/api/mobile/${TOKEN}/skip`, { method: 'POST' });
+                console.log('[SKIP] backend response:', resp.status);
+            } catch (e) { console.warn('[SKIP] backend error:', e); }
+
+            hasSerial = false;
+            lastInspectionState = 'complete'; // mark as complete so board_seq check won't double-trigger
+            lastBoardSeq++; // sync with server increment to prevent board_seq re-detection
+            photosSent = 0;
+            document.getElementById('zone-photo-count').textContent = '0';
+
+            // Clear UI
+            document.getElementById('serial-result-mobile').innerHTML = '';
+            document.getElementById('serial-result-mobile').classList.add('hidden');
+            document.getElementById('zone-result-mobile').innerHTML = '';
+
+            // Switch to serial mode using shared function
+            switchMode('serial');
+
+            skipActive = false;
+            actionInProgress = false;
+            console.log('[SKIP] done, now in serial mode');
+        }
+
+        async function mobileRetryFailed() {
+            retryActive = true;
+            showZoneResult('Rescanning warn/defect zones...', 'info');
+            lastInspectionState = 'scanning';
+            // Clear failed zones on server
+            try {
+                await fetch(`${BASE_URL}/api/mobile/${TOKEN}/retry_failed`, { method: 'POST' });
+            } catch (e) { /* ignore */ }
+            // Re-poll to get updated zones then navigate to first failed
+            await pollProgress();
+            const failedIdx = zonesInfo.findIndex(z => !z.checked);
+            if (failedIdx >= 0) {
+                currentZoneIdx = failedIdx;
+                anchorRefs = (zonesInfo[currentZoneIdx] || {}).anchors || [];
+                updateZoneNav();
+                stopAnchorDetect();
+                drawReferenceAnchors();
+                if (anchorRefs.length > 0) startAnchorDetect();
+            }
+        }
+
+        function showZoneResult(msg, type) {
+            const div = document.getElementById('zone-result-mobile');
+            div.innerHTML = `<div class="result-box result-${type}">${msg}</div>` + div.innerHTML;
+            while (div.children.length > 5) div.removeChild(div.lastChild);
+        }
+
+        // Background poll: detect session changes from desktop
+        let bgPollTimer = null;
+        function startBgPoll() {
+            if (bgPollTimer) return;
+            bgPollTimer = setInterval(pollProgress, 5000);
+        }
+
+        init();
+        startBgPoll();
+    </script>
+</body>
+
+</html>

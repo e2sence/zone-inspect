@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PCB Zone Check</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css?v={{ v }}">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>PCB Zone Check</h1>
+                <p>// inspection &amp; defect analysis system v2.0</p>
+            </div>
+            <div class="sens-controls">
+                <label>Zone <input type="number" id="inp-zone-sens" min="0" max="2" step="0.01" value="0.50"></label>
+                <label>Subzone <input type="number" id="inp-subzone-sens" min="0" max="2" step="0.01"
+                        value="0.51"></label>
+            </div>
+            <a href="/logout"
+                style="font-size:11px;color:var(--muted);text-decoration:none;border:1px solid var(--border);padding:4px 10px;border-radius:6px;transition:color .2s"
+                onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'"
+                title="Logout">⏻ Logout</a>
+        </header>
+
+        <!-- Steps -->
+        <div class="steps">
+            <div class="step active" id="step-1" style="cursor:pointer" title="Back to start"><span
+                    class="num">1</span>Upload</div>
+            <div class="step-line" id="line-1"></div>
+            <div class="step" id="step-2"><span class="num">2</span>Zones</div>
+            <div class="step-line" id="line-2"></div>
+            <div class="step" id="step-3"><span class="num">3</span>Check</div>
+        </div>
+
+        <!-- ═══ STEP 1: Upload reference ═══ -->
+        <div id="panel-1" class="card">
+            <h2>Upload Reference Board</h2>
+            <p style="color:var(--muted);font-size:12px;margin-bottom:6px">
+                Upload one or more photos. Multiple shots will be auto-aligned and averaged.
+            </p>
+            <div class="dropzone" id="dz-ref">
+                <span class="dropzone-label">Drop images here (multiple OK)</span>
+                <input type="file" accept="image/*" id="file-ref" multiple>
+            </div>
+            <div id="stitch-panel" class="stitch-preview hidden">
+                <h3 id="stitch-title">Image Blending (averaging)</h3>
+                <div id="stitch-edit-area">
+                    <div class="stitch-canvas-wrap">
+                        <canvas id="stitch-canvas"></canvas>
+                    </div>
+                    <div class="stitch-controls" id="stitch-controls"></div>
+                    <div style="margin-top:.6rem;display:flex;gap:.5rem;align-items:center">
+                        <button class="btn btn-sm" id="btn-stitch">Blend (manual)</button>
+                        <button class="btn btn-sm" id="btn-auto-blend" style="background:var(--accent)">
+                            <span class="spinner hidden" id="spin-auto-blend"></span>
+                            Auto-align (SIFT)
+                        </button>
+                    </div>
+                </div>
+                <div id="stitch-result-wrap" class="hidden">
+                    <div
+                        style="overflow:auto;max-height:500px;border:1px solid var(--border);border-radius:.4rem;background:#000;margin-top:.4rem">
+                        <img id="stitch-result-img" style="display:block;max-width:100%">
+                    </div>
+                    <p id="stitch-result-info" style="font-size:12px;color:var(--muted);margin-top:4px"></p>
+                    <button class="btn btn-outline btn-sm" id="btn-stitch-redo"
+                        style="margin-top:.5rem">Readjust</button>
+                </div>
+            </div>
+            <div style="margin-top:8px">
+                <button class="btn" id="btn-upload" disabled>
+                    <span class="spinner hidden" id="spin-upload"></span>
+                    Upload
+                </button>
+            </div>
+            <div class="divider"></div>
+            <h2>Saved Templates</h2>
+            <div id="tpl-list" class="tpl-grid">
+                <p style="color:var(--muted);font-size:12px">Loading...</p>
+            </div>
+        </div>
+
+        <!-- ═══ STEP 2: Draw zones ═══ -->
+        <div id="panel-2" class="card card-canvas hidden">
+            <h2>Define Inspection Zones</h2>
+            <p style="color:var(--muted);font-size:12px;margin-bottom:6px">
+                Click and drag to draw rectangular inspection zones.
+            </p>
+            <div class="zoom-bar" id="zoom-bar">
+                <button class="zoom-btn" id="zoom-out" title="Zoom out">−</button>
+                <span class="zoom-level" id="zoom-level">100%</span>
+                <button class="zoom-btn" id="zoom-in" title="Zoom in">+</button>
+                <button class="zoom-btn" id="zoom-reset" title="Reset zoom">⟳</button>
+                <span style="font-size:10px;color:var(--muted);margin-left:4px">Ctrl+scroll = zoom</span>
+            </div>
+            <div class="canvas-wrap" id="canvas-wrap">
+                <canvas id="ref-canvas"></canvas>
+            </div>
+            <div class="zone-chips" id="zone-chips"></div>
+            <div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;align-items:center">
+                <button class="btn" id="btn-save-zones" disabled>Save zones & start check</button>
+                <button class="btn btn-outline btn-sm" id="btn-clear-zones">Clear all</button>
+                <button class="btn btn-outline btn-sm" id="btn-undo-zone">Undo last</button>
+            </div>
+            <div id="anchor-hint" class="hidden"
+                style="margin-top:4px;padding:4px 8px;background:var(--warn-dim);border:1px solid var(--warn);border-radius:var(--radius);font-size:12px;color:var(--warn)">
+                ⌖ Click on the image to place 2 anchor points. <a href="#" id="anchor-hint-done"
+                    style="color:var(--warn);margin-left:6px">Done</a> <a href="#" id="anchor-hint-clear"
+                    style="color:var(--danger);margin-left:6px">Clear</a>
+            </div>
+            <div id="subzone-hint" class="hidden"
+                style="margin-top:4px;padding:4px 8px;background:#ff6b6b18;border:1px solid #ff6b6b;border-radius:var(--radius);font-size:12px;color:#ff6b6b">
+                ◻ Draw up to 10 subzones inside the selected zone (strict check). <a href="#" id="subzone-hint-done"
+                    style="color:#ff6b6b;margin-left:6px">Done</a> <a href="#" id="subzone-hint-clear"
+                    style="color:var(--danger);margin-left:6px">Clear all</a>
+                <div id="subzone-chips" style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px"></div>
+            </div>
+            <div class="divider"></div>
+            <h2>Save as Template</h2>
+            <div class="save-tpl-row">
+                <input type="text" id="tpl-name-input" placeholder="Template name, e.g. Module XY-300">
+                <input type="text" id="tpl-mask-input" placeholder="Barcode mask, e.g. 7334" style="max-width:130px">
+                <button class="btn btn-sm" id="btn-save-tpl" disabled>Save Template</button>
+            </div>
+        </div>
+
+        <!-- ═══ STEP 3: Check zones ═══ -->
+        <div id="panel-3" class="card hidden">
+            <h2>Zone Inspection</h2>
+            <div id="recipe-badge" class="hidden"
+                style="margin-bottom:6px;padding:3px 8px;background:var(--accent-dim);border:1px solid var(--accent);border-radius:3px;font-size:12px;display:inline-flex;gap:6px;align-items:center">
+                <span style="color:var(--accent)">Recipe:</span>
+                <strong id="recipe-badge-name" style="color:var(--text-bright)"></strong>
+                <span id="recipe-badge-mask" style="color:var(--muted);font-family:var(--mono)"></span>
+            </div>
+
+            <div class="serial-inspect-row">
+                <!-- ── Serial number photo ── -->
+                <div id="serial-section">
+                    <p style="font-size:12px;margin-bottom:5px"><strong>Step 1:</strong> Scan serial number
+                        (barcode / QR / DataMatrix)</p>
+
+                    <!-- QR code for mobile camera -->
+                    <div id="mobile-qr-section"
+                        style="margin-bottom:8px;display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
+                        <div style="text-align:center">
+                            <div id="qr-loading"
+                                style="width:120px;height:120px;display:flex;align-items:center;justify-content:center;background:var(--bg2);border-radius:3px;border:1px solid var(--border)">
+                                <span class="spinner" style="width:16px;height:16px"></span>
+                            </div>
+                            <img id="qr-image" class="hidden"
+                                style="width:120px;height:120px;border-radius:3px;image-rendering:pixelated">
+                        </div>
+                        <div style="flex:1;min-width:150px">
+                            <p style="font-size:12px;color:var(--text-bright);margin-bottom:3px"><strong>SCAN QR WITH
+                                    PHONE</strong></p>
+                            <p style="font-size:12px;color:var(--muted);margin-bottom:4px">
+                                Opens camera — send serial &amp; zone photos from mobile.
+                            </p>
+                            <div id="mobile-link-wrap" class="hidden" style="font-size:12px">
+                                <a id="mobile-link" href="#" target="_blank"
+                                    style="color:var(--accent);word-break:break-all"></a>
+                            </div>
+                            <div id="mobile-poll-status" style="font-size:12px;color:var(--muted);margin-top:4px"></div>
+                        </div>
+                    </div>
+
+                    <p style="font-size:12px;color:var(--muted);margin-bottom:4px">Or upload from computer:</p>
+                    <div class="dropzone" id="dz-serial" style="padding:8px">
+                        <span class="dropzone-label">Serial number photo</span>
+                        <input type="file" accept="image/*" id="file-serial">
+                    </div>
+                    <div id="serial-status" style="margin-top:4px;font-size:12px" class="hidden">
+                        <span class="spinner hidden" id="spin-serial"></span>
+                        <span id="serial-text"></span>
+                    </div>
+                    <div id="serial-result" class="hidden"
+                        style="margin-top:4px;padding:4px 8px;background:var(--success-dim);border:1px solid var(--success);border-radius:3px;font-size:12px">
+                        <span style="color:var(--success)">SERIAL:</span>
+                        <strong id="serial-value" style="color:var(--text-bright);margin-left:4px"></strong>
+                        <span id="serial-type" style="color:var(--muted);margin-left:6px;font-size:12px"></span>
+                        <span id="serial-mask-warn" class="hidden"
+                            style="margin-left:8px;color:var(--danger);font-size:11px;font-weight:600">⚠ Mask
+                            mismatch!</span>
+                    </div>
+                    <div id="serial-error" class="hidden"
+                        style="margin-top:4px;padding:4px 8px;background:var(--danger-dim);border:1px solid var(--danger);border-radius:3px;font-size:12px;color:var(--danger)">
+                    </div>
+                </div>
+
+                <!-- ── Zone check (hidden until serial is set) ── -->
+                <div id="zone-check-area" style="opacity:0.3;pointer-events:none;flex:1;min-width:0">
+                    <p style="font-size:12px;margin-bottom:4px"><strong>STEP 2:</strong> Upload zone photos for
+                        inspection
+                    </p>
+
+                    <!-- Row 1: reference overview + zone controls -->
+                    <div class="inspection-row1">
+                        <div class="inspection-ref-wrap">
+                            <p
+                                style="color:var(--muted);font-size:12px;margin-bottom:3px;text-transform:uppercase;letter-spacing:.5px">
+                                Reference</p>
+                            <canvas id="ref-canvas-mini"></canvas>
+                        </div>
+                        <div class="inspection-zones-panel">
+                            <p
+                                style="color:var(--muted);font-size:12px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px">
+                                Progress:</p>
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="progress-fill" style="width:0%">0/0</div>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+                                <div class="zone-chips" id="zone-status" style="flex:1"></div>
+                                <label class="auto-toggle" title="Auto-accept when all zones OK">
+                                    <input type="checkbox" id="chk-auto-accept" checked>
+                                    <span class="auto-toggle-slider"></span>
+                                    <span class="auto-toggle-label">auto</span>
+                                </label>
+                            </div>
+
+                            <div id="inspection-action-btns" class="action-btns-inline hidden">
+                                <button class="btn btn-sm" id="btn-skip-board"
+                                    style="background:var(--warn);color:#000">Skip Board</button>
+                                <button class="btn btn-outline btn-sm" id="btn-retry-board">Retry Failed Zones</button>
+                            </div>
+
+                            <p
+                                style="color:var(--muted);font-size:12px;margin-bottom:4px;margin-top:8px;text-transform:uppercase;letter-spacing:.5px">
+                                Upload zone photos:</p>
+                            <div class="dropzone" id="dz-check" style="padding:10px 8px">
+                                <span class="dropzone-label">Drop zone photos here (multiple OK)</span>
+                                <input type="file" accept="image/*" id="file-check" multiple>
+                            </div>
+                            <div id="check-queue" style="margin-top:4px;font-size:12px;color:var(--muted)"></div>
+                            <div id="mobile-photos-banner" class="hidden"
+                                style="margin-top:4px;padding:4px 8px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.25);border-radius:3px;font-size:12px;color:var(--accent);display:flex;align-items:center;gap:4px">
+                                <span>📱</span>
+                                <span id="mobile-photos-text">0 mobile photos</span>
+                                <button class="btn btn-sm" id="btn-process-mobile"
+                                    style="margin-left:auto;padding:2px 6px;font-size:12px">
+                                    Process
+                                </button>
+                            </div>
+                            <div style="margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                                <button class="btn btn-sm" id="btn-check" disabled>
+                                    <span class="spinner hidden" id="spin-check"></span>
+                                    Run Check
+                                </button>
+                                <button class="btn btn-outline btn-sm" id="btn-reset-checks">Reset</button>
+                                <button class="btn btn-sm" id="btn-close-save"
+                                    style="background:var(--warn);color:#000;margin-left:auto">Close &amp; Save</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Completion banners -->
+                    <div id="complete-banner" class="complete-banner hidden">
+                        <h2 id="complete-banner-title">ALL ZONES VERIFIED</h2>
+                        <p id="serial-in-banner" class="hidden"
+                            style="color:var(--muted);margin-top:.3rem;font-size:12px">
+                        </p>
+                        <p id="complete-banner-sub" style="color:var(--muted);margin-top:4px;font-size:12px">Saving
+                            result...</p>
+                    </div>
+                </div><!-- /zone-check-area -->
+            </div><!-- /serial-inspect-row -->
+
+            <!-- Match result — full width -->
+            <div id="match-result" class="hidden" style="margin-top:8px">
+                <h2 id="match-title" style="font-size:12px"></h2>
+                <div class="five-img-grid" id="match-body"></div>
+                <div id="all-scores" style="margin-top:6px"></div>
+            </div>
+        </div>
+
+        <!-- ── Statistics Dashboard ── -->
+        <div id="stats-panel" class="stats-dashboard hidden">
+            <h2>Inspection Statistics</h2>
+            <div class="stats-summary" id="stats-summary">
+                <div class="stat-box" id="stat-total">
+                    <div class="stat-value">0</div>
+                    <div class="stat-label">Checked</div>
+                </div>
+                <div class="stat-box stat-ok" id="stat-ok">
+                    <div class="stat-value">0</div>
+                    <div class="stat-label">OK</div>
+                </div>
+                <div class="stat-box stat-warn" id="stat-warn">
+                    <div class="stat-value">0</div>
+                    <div class="stat-label">Warn</div>
+                </div>
+                <div class="stat-box stat-danger" id="stat-defect">
+                    <div class="stat-value">0</div>
+                    <div class="stat-label">Defect</div>
+                </div>
+                <div class="stat-box" id="stat-avg-ssim">
+                    <div class="stat-value">—</div>
+                    <div class="stat-label">Avg SSIM</div>
+                </div>
+                <div class="stat-box" id="stat-avg-defect">
+                    <div class="stat-value">—</div>
+                    <div class="stat-label">Avg Defect%</div>
+                </div>
+            </div>
+            <div class="stats-grid">
+                <div class="stats-card">
+                    <h3>Zone Match Scores</h3>
+                    <canvas id="chart-scores"></canvas>
+                </div>
+                <div class="stats-card">
+                    <h3>Defect % by Zone</h3>
+                    <canvas id="chart-defects"></canvas>
+                </div>
+                <div class="stats-card">
+                    <h3>SSIM by Zone</h3>
+                    <canvas id="chart-ssim"></canvas>
+                </div>
+                <div class="stats-card">
+                    <h3>Inspection Log</h3>
+                    <div style="max-height:180px;overflow-y:auto">
+                        <table class="data-table" id="stats-table">
+                            <thead>
+                                <tr>
+                                    <th>Zone</th>
+                                    <th>Status</th>
+                                    <th>Score</th>
+                                    <th>SSIM</th>
+                                    <th>Def%</th>
+                                    <th>Count</th>
+                                </tr>
+                            </thead>
+                            <tbody id="stats-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Inspection History ── -->
+        <div id="history-panel" class="history-panel">
+            <div class="history-header" id="history-header">
+                <span class="history-toggle-arrow">&#9660;</span>
+                <h2>Inspection History <span id="history-count"
+                        style="font-weight:400;color:var(--muted);font-size:12px"></span></h2>
+                <input type="text" class="history-search" id="history-search"
+                    placeholder="SN / template / operator (* = wildcard)" onclick="event.stopPropagation()">
+                <button class="btn-clear-history" id="btn-clear-history"
+                    onclick="event.stopPropagation();clearSearchInput()" title="Clear search">&#10005;</button>
+                <button class="btn-clear-history" style="font-size:14px;margin-left:4px"
+                    onclick="event.stopPropagation();loadHistory()" title="Refresh history">&#8635;</button>
+            </div>
+            <div class="history-body">
+                <div id="history-list" class="history-list">
+                    <p style="color:var(--muted);font-size:12px">Loading...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Inspection lightbox modal -->
+        <div id="inspect-lightbox" class="zcm-overlay hidden" onclick="if(event.target===this)closeInspectLightbox()">
+            <div class="zcm-content" style="max-width:95vw">
+                <button class="zcm-close" onclick="closeInspectLightbox()">&times;</button>
+                <div class="ilb-header" id="ilb-header"></div>
+                <div class="ilb-body" id="ilb-body"></div>
+            </div>
+        </div>
+
+        <!-- Zone compare modal -->
+        <div id="zone-compare-modal" class="zcm-overlay hidden" onclick="if(event.target===this)closeZoneCompare()">
+            <div class="zcm-content">
+                <button class="zcm-close" onclick="closeZoneCompare()">&times;</button>
+                <div class="zcm-title" id="zcm-title"></div>
+                <div class="zcm-images">
+                    <div class="zcm-col">
+                        <div class="zcm-label">CAPTURED</div>
+                        <img id="zcm-captured" src="" alt="Captured">
+                    </div>
+                    <div class="zcm-col">
+                        <div class="zcm-label">REFERENCE</div>
+                        <img id="zcm-reference" src="" alt="Reference">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+    <div id="print-passport"></div>
+
+
+    <script src="/static/app.js?v={{ v }}"></script>
+
+
+    <!-- ═══ Template Editor Modal ═══ -->
+    <div id="tpl-editor-overlay" class="tpl-editor-overlay hidden">
+        <div class="tpl-editor">
+            <button class="te-close" id="te-close">&times;</button>
+            <h2 id="te-title">Edit Template</h2>
+            <div class="te-row">
+                <div class="te-col-img">
+                    <div class="te-field">
+                        <label>Name</label>
+                        <input type="text" id="te-name">
+                    </div>
+                    <div class="te-field">
+                        <label>Barcode mask</label>
+                        <input type="text" id="te-mask" placeholder="e.g. 7334">
+                    </div>
+                    <div class="zoom-bar" id="te-zoom-bar">
+                        <button class="zoom-btn" id="te-zoom-out" title="Zoom out">−</button>
+                        <span class="zoom-level" id="te-zoom-level">100%</span>
+                        <button class="zoom-btn" id="te-zoom-in" title="Zoom in">+</button>
+                        <button class="zoom-btn" id="te-zoom-reset" title="Reset zoom">⟳</button>
+                        <span style="font-size:10px;color:var(--muted);margin-left:4px">Ctrl+scroll = zoom</span>
+                    </div>
+                    <div class="te-canvas-wrap">
+                        <canvas id="te-canvas"></canvas>
+                    </div>
+                    <p id="te-draw-hint" style="font-size:11px;color:var(--muted);margin:0">
+                        Draw rectangles to add zones. Click ⌖ to place anchors.
+                    </p>
+                    <div id="te-anchor-hint" class="te-hint hidden">
+                        ⌖ Click on image to place anchors (max 2). <a href="#" id="te-anchor-done"
+                            style="color:var(--warn);margin-left:4px">Done</a>
+                        <a href="#" id="te-anchor-clear" style="color:var(--danger);margin-left:4px">Clear</a>
+                    </div>
+                    <div id="te-subzone-hint" class="te-hint hidden"
+                        style="background:#ff6b6b18;border-color:#ff6b6b;color:#ff6b6b">
+                        ◻ Draw subzones inside the selected zone (max 10). <a href="#" id="te-subzone-done"
+                            style="color:#ff6b6b;margin-left:4px">Done</a>
+                        <a href="#" id="te-subzone-clear" style="color:var(--danger);margin-left:4px">Clear</a>
+                        <div id="te-subzone-chips" style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px"></div>
+                    </div>
+                </div>
+                <div class="te-col-zones">
+                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+                        <label
+                            style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:0">Zones</label>
+                        <span id="te-zone-count"
+                            style="font-size:11px;color:var(--accent);font-family:var(--mono)"></span>
+                    </div>
+                    <ul class="te-zone-list" id="te-zone-list"></ul>
+                    <div style="margin-top:8px">
+                        <p style="font-size:11px;color:var(--muted);margin:0 0 6px">
+                            Version history
+                        </p>
+                        <div class="te-ver-list" id="te-ver-list"></div>
+                    </div>
+                    <div class="te-actions">
+                        <button class="btn" id="te-save" style="background:var(--accent)">Save changes</button>
+                        <button class="btn btn-outline" id="te-cancel">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/tpl-editor.js?v={{ v }}"></script>
+</body>
+
+</html>

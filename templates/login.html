@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PCB Inspect — Enter Key</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #0a0c10;
+            color: #c9d1d9;
+            font-family: 'JetBrains Mono', monospace;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+
+        .login-card {
+            background: #111318;
+            border: 1px solid #21262d;
+            border-radius: 12px;
+            padding: 40px 36px;
+            width: 360px;
+            text-align: center;
+        }
+
+        .login-card .logo {
+            width: 48px;
+            height: 48px;
+            background: #3b82f6;
+            border-radius: 10px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-weight: 800;
+            font-size: 22px;
+            margin-bottom: 16px;
+        }
+
+        .login-card h1 {
+            font-size: 18px;
+            font-weight: 700;
+            color: #e6edf3;
+            margin-bottom: 4px;
+        }
+
+        .login-card p {
+            font-size: 12px;
+            color: #6e7681;
+            margin-bottom: 28px;
+        }
+
+        .login-card input {
+            width: 100%;
+            background: #0d1017;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 12px 14px;
+            color: #e6edf3;
+            font-family: inherit;
+            font-size: 12px;
+            text-align: center;
+            letter-spacing: 2px;
+            outline: none;
+            transition: border-color .2s;
+        }
+
+        .login-card input:focus {
+            border-color: #3b82f6;
+        }
+
+        .login-card input::placeholder {
+            color: #484f58;
+            letter-spacing: 0;
+        }
+
+        .login-card button {
+            width: 100%;
+            margin-top: 16px;
+            background: #3b82f6;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 12px;
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background .2s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .login-card button:hover {
+            background: #60a5fa;
+        }
+
+        .login-card button:disabled {
+            background: #1e3a5f;
+            cursor: wait;
+        }
+
+        .error {
+            color: #f87171;
+            font-size: 12px;
+            margin-top: 12px;
+            min-height: 18px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="login-card">
+        <div class="logo">P</div>
+        <h1>PCB Inspect</h1>
+        <p>Enter access key</p>
+        <input type="text" id="key-input" placeholder="key" autocomplete="off" autofocus>
+        <button id="login-btn">Login</button>
+        <div class="error" id="error-msg"></div>
+    </div>
+    <script>
+        const inp = document.getElementById('key-input');
+        const btn = document.getElementById('login-btn');
+        const err = document.getElementById('error-msg');
+
+        async function doLogin() {
+            const key = inp.value.trim();
+            if (!key) { err.textContent = 'Enter key'; return; }
+            err.textContent = '';
+            btn.disabled = true;
+            try {
+                const resp = await fetch('/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key })
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    window.location.href = '/';
+                } else {
+                    err.textContent = data.error || 'Error';
+                }
+            } catch (e) {
+                err.textContent = 'Connection error';
+            }
+            btn.disabled = false;
+        }
+
+        btn.addEventListener('click', doLogin);
+        inp.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+    </script>
+</body>
+
+</html>

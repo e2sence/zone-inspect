@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+
+# Secrets — NEVER commit these
+.env
+r2_config.json
+bot_config.json
+auth_keys.json
+.mobile_tokens.json
+
+# Runtime data
+uploads/
+results/
+inspection_results/
+saved_templates/
+references/
+*.pt
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+nohup.out

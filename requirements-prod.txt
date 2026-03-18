@@ -1,0 +1,24 @@
+# Core
+flask>=3.0.0
+gunicorn>=22.0.0
+
+# Image processing
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+scikit-image>=0.21.0
+
+# Neural engine — torch CPU installed separately via --index-url
+# (see deploy script — saves ~1.5GB disk vs full CUDA build)
+torchvision>=0.16.0
+
+# Barcode scanning
+zxing-cpp>=2.0.0
+
+# Cloud storage
+boto3>=1.28.0
+
+# QR code generation
+qrcode[pil]>=7.4
+
+# .env file support
+python-dotenv>=1.0.0
