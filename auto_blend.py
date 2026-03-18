@@ -29,8 +29,6 @@ except ImportError:
 
 # ── Barcode / QR detection ────────────────────────────────────────────────────
 
-import time as _time
-
 # Format name mapping for zxing-cpp
 _ZXING_FORMAT_NAMES = {
     "QRCode": "QR", "DataMatrix": "DataMatrix", "Aztec": "Aztec",
@@ -59,7 +57,6 @@ def detect_codes(img: np.ndarray, dmtx_timeout: int = 1500, quick: bool = False)
     Fallback: OpenCV + pylibdmtx.
     Returns list of {type, data, bbox} where bbox is (x, y, w, h).
     """
-    t0 = _time.time()
     results = []
     seen_data = set()
 
@@ -129,10 +126,6 @@ def detect_codes(img: np.ndarray, dmtx_timeout: int = 1500, quick: bool = False)
         results = _detect_codes_opencv(
             gray_det, det_scale, dmtx_timeout, quick)
 
-    elapsed = _time.time() - t0
-    engine = "zxing" if _HAS_ZXING else "opencv"
-    # print(f"   🔍 detect_codes[{engine}]: {len(results)} found in {elapsed:.2f}s "
-    #       f"(quick={quick}, scale={det_scale:.2f})")
     return results
 
 

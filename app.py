@@ -22,14 +22,12 @@ import os as _os
 import json
 import uuid
 import base64
-import shutil
 import time
 import threading
 from pathlib import Path
 
 import cv2
 import numpy as np
-from functools import wraps
 from flask import Flask, request, jsonify, render_template, send_file, make_response, redirect
 from skimage.metrics import structural_similarity as ssim
 from auto_blend import auto_blend_images, detect_codes
@@ -182,10 +180,6 @@ def _cleanup_sessions():
             mobile_photos.pop(sid, None)
             # Remove mobile tokens pointing to this session
             _remove_tokens_for_session(sid)
-        if expired:
-            # print(f"🧹 Cleaned {len(expired)} expired sessions, {len(sessions)} active")
-            pass
-
 
 _cleanup_thread = threading.Thread(target=_cleanup_sessions, daemon=True)
 _cleanup_thread.start()
@@ -501,9 +495,6 @@ def _try_global_align_full(ref_img, photo):
     M_full = S_ref_inv @ M @ S_photo
 
     return cv2.warpPerspective(photo, M_full, (rw, rh))
-    if cropped.size == 0:
-        return None
-    return cropped
 
 
 def _locate_and_extract(zone_crop: np.ndarray, photo: np.ndarray,
@@ -900,24 +891,6 @@ def _check_zone_impl(sid, photo_img=None):
     if subzone_sens is None:
         subzone_sens = _cfg.SUBZONE_SENSITIVITY
 
-    # DEBUG: log sensitivity values used
-    import logging as _log
-    _log.warning(
-        "SENS_DEBUG zone_sens=%.3f subzone_sens=%.3f | "
-        "PATCH_SIM_THR=%.3f PATCH_DEF_W=%.1f HI_SIM_DISC=%.3f "
-        "VERDICT_OK=%.1f VERDICT_WARN=%.1f | "
-        "SZ_DISC_GOOD=%.3f SZ_DISC_MIN=%.3f SZ_FORCED=%.1f "
-        "SZ_VERDICT_OK=%.1f SZ_PATCH_THR=%.3f",
-        zone_sens, subzone_sens,
-        _cfg.PATCH_SIM_THRESHOLD, _cfg.PATCH_DEFECT_WEIGHT,
-        _cfg.PATCH_HIGH_SIM_DISCOUNT,
-        _cfg.VERDICT_OK_THRESHOLD, _cfg.VERDICT_WARN_THRESHOLD,
-        _cfg.SUBZONE_DISCOUNT_GOOD, _cfg.SUBZONE_DISCOUNT_MINIMAL,
-        _cfg.SUBZONE_FORCED_DEFECT_PCT,
-        _cfg.SUBZONE_VERDICT_OK_THRESHOLD,
-        _cfg.SUBZONE_PATCH_SIM_THRESHOLD,
-    )
-
     if photo_img is not None:
         photo = photo_img
     else:
@@ -989,7 +962,6 @@ def _check_zone_impl(sid, photo_img=None):
 
         candidates.append({"idx": i, "ssim_quick": ssim_quick,
                           "extracted": extracted, "method": method})
-        # print(f"   📊 Zone {i} ({z['label']}): ssim_quick={ssim_quick:.3f}, method={method}")
 
     # STEP 3: NN scoring only for top candidates (saves EfficientNet passes)
     valid = [c for c in candidates if c["extracted"] is not None]
@@ -1002,7 +974,6 @@ def _check_zone_impl(sid, photo_img=None):
             c["score"] = similarity_nn(crop, c["extracted"])
         else:
             c["score"] = c["ssim_quick"]
-        # print(f"   🔍 Zone {c['idx']}: nn_score={c['score']:.3f}")
 
     for c in valid[TOP_N:]:
         c["score"] = c["ssim_quick"] * 0.5
@@ -1913,7 +1884,6 @@ def generate_mobile_qr(sid):
         base_url = f"{scheme}://{host}"
 
     url = f"{base_url}/mobile?token={token}"
-    # print(f"📱 Mobile QR: {url}")
 
     # Generate QR as base64 PNG
     qr = qrcode.QRCode(

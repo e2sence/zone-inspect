@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# Поработал локально → проверил → готов деплоить:
+git add -A && git commit -m "описание"
+./deploy.sh deploy
+
 #═══════════════════════════════════════════════════════════════════════════════
 #  deploy.sh — One-command deploy for PCB Inspect
 #

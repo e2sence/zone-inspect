@@ -225,9 +225,6 @@ def align_photo_to_ref(ref_img: np.ndarray, photo: np.ndarray):
     if inlier_ratio < 0.25:
         return None
 
-    # print(f"   🔍 Global alignment: {int(mask.sum())}/{len(mask)} inliers "
-    #       f"({inlier_ratio:.0%}), good={len(good)}")
-
     S_src = np.diag([p_scale, p_scale, 1.0])
     S_dst_inv = np.diag([1 / r_scale, 1 / r_scale, 1.0])
     M_full = S_dst_inv @ M @ S_src
@@ -260,7 +257,6 @@ def locate_and_extract_nn(zone_crop: np.ndarray, photo: np.ndarray,
         extracted = _try_global_alignment(ref_img, photo, zone)
         if extracted is not None:
             result = cv2.resize(extracted, (zw, zh))
-            # print(f"   ✅ Extraction: global_homography")
             return result, "global_homography"
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -268,14 +264,12 @@ def locate_and_extract_nn(zone_crop: np.ndarray, photo: np.ndarray,
     # ═══════════════════════════════════════════════════════════════════════
     extracted = _try_local_sift(zone_crop, photo)
     if extracted is not None:
-        # print(f"   ✅ Extraction: local_homography")
         return extracted, "local_homography"
 
     # ═══════════════════════════════════════════════════════════════════════
     # Strategy C: Multi-scale template matching
     # ═══════════════════════════════════════════════════════════════════════
     extracted = _try_template_match(zone_crop, photo)
-    # print(f"   ✅ Extraction: template_match (fallback)")
     return cv2.resize(extracted, (zw, zh)), "template_match"
 
 
@@ -334,9 +328,6 @@ def _try_global_alignment(ref_img, photo, zone):
     if inlier_ratio < 0.25:
         return None
 
-    # print(f"   🔍 Global alignment: {int(mask.sum())}/{len(mask)} inliers"
-    #       f" ({inlier_ratio:.0%}), good={len(good)}")
-
     # Компенсируем масштабирование: переводим M из small-space в full-space
     S_src = np.diag([p_scale, p_scale, 1.0])    # photo scaling
     S_dst_inv = np.diag([1/r_scale, 1/r_scale, 1.0])  # ref inverse scaling
@@ -366,7 +357,6 @@ def _try_global_alignment(ref_img, photo, zone):
     gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     black_ratio = (gray_crop < 5).sum() / gray_crop.size
     if black_ratio > 0.15:
-        # print(f"   ⚠️ Global alignment: {black_ratio:.0%} black pixels, skipping")
         return None
 
     return crop
@@ -495,9 +485,6 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
     b_g = cv2.GaussianBlur(b_g, cfg.SSIM_BLUR_KERNEL, 0)
     ssim_val = float(ssim_func(a_g, b_g, data_range=255))
 
-    # print(f"   🔍 Global similarity: {global_sim:.3f}, SSIM: {ssim_val:.3f}, "
-    #       f"NN_score: {extract_nn_score:.3f}, strict={strict}")
-
     # ─── 3. Patch-based CNN similarity map ────────────────────────────────
     # Сравниваем feature maps на уровне патчей (каждая позиция = ~32x32 px)
     z_feat = z_feats[cfg.PATCH_LAYER]
@@ -541,13 +528,6 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
     defect_patches = raw_defect_patches * tex_w
     patch_defect_ratio = float(defect_patches.sum() / (patch_h * patch_w))
 
-    raw_count = int(raw_defect_patches.sum())
-    weighted_count = float(defect_patches.sum())
-    # print(f"   📊 Patch map: {patch_h}x{patch_w}, "
-    #       f"raw_defects={raw_count}/{patch_h * patch_w}, "
-    #       f"texture-weighted={weighted_count:.1f} "
-    #       f"({patch_defect_ratio:.1%}), thr={patch_sim_thr}")
-
     # ─── 4. Вычисление defect_pct ────────────────────────────────────────
     # Основа: доля дефектных патчей × вес
     raw_defect = patch_defect_ratio * patch_def_w
@@ -571,9 +551,6 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
             hist_corrs.append(cv2.compareHist(
                 h_ref, h_ext, cv2.HISTCMP_CORREL))
         hist_corr = sum(hist_corrs) / len(hist_corrs)
-
-        # print(f"   📊 Subzone: hist_corr={hist_corr:.3f}, "
-        #       f"global_sim={global_sim:.3f}, ssim={ssim_val:.3f}")
 
         # 3) Комбинированный скор подзоны
         #    Если гистограмма или SSIM или global_sim очень низкие → defect
@@ -625,9 +602,6 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
         defect_pct, ok_thr, warn_thr, patch_sim_thr
     )
 
-    # print(f"   📊 Defect calc: raw={raw_defect:.1f}%, best_global={best_global:.3f}, "
-    #       f"final defect_pct={defect_pct:.1f}%")
-
     # ─── 5. Визуализация ──────────────────────────────────────────────────
     vis_size = (256, 256)
     b_vis = cv2.resize(extracted, vis_size)
@@ -678,9 +652,6 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
         color = (0, 0, 255) if status != "ok" else (0, 100, 255)
         thick = 2 if status != "ok" else 1
         cv2.drawContours(vis_defects, contours, -1, color, thick)
-
-    # print(f"   🏁 Verdict: {status}, defect_pct={defect_pct:.1f}%, "
-    #       f"global_sim={global_sim:.3f}, ssim={ssim_val:.3f}")
 
     return {
         "ssim": round(ssim_val, 4),
