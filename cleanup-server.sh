@@ -8,10 +8,10 @@
 #
 #  SAFE: Does NOT touch /var/www/mpts_NSCW or application data.
 #═══════════════════════════════════════════════════════════════════════════════
-set -euo pipefail
+set -u
 
 SERVER="${DEPLOY_SERVER}"
-SSH="ssh -o ConnectTimeout=15 $SERVER"
+SSH="ssh -o ConnectTimeout=15 -o ServerAliveInterval=5 $SERVER"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -63,47 +63,47 @@ cmd_clean() {
     echo -e "${BOLD}═══════════════════════════════════════════════════════${NC}"
     echo ""
 
-    # Show before
-    $SSH "df -h / | tail -1 | awk '{printf \"   Before: Used %s / %s (%s)\n\", \$3, \$2, \$5}'"
-    echo ""
+    # Run ALL cleanup in a single SSH session to avoid connection drops
+    $SSH 'bash -s' <<'REMOTE_SCRIPT'
+        step() { printf "▶ [\033[0;36m%s\033[0m] %s\n" "$1" "$2"; }
+        ok()   { printf "   \033[0;32mDone\033[0m\n"; }
 
-    # 1. pip cache
-    echo -e "▶ ${CYAN}[1/7]${NC} Clearing pip cache..."
-    $SSH "pip cache purge 2>/dev/null; rm -rf ~/.cache/pip/ 2>/dev/null; sudo rm -rf /root/.cache/pip/ 2>/dev/null" || true
-    echo -e "   ${GREEN}Done${NC}"
+        df -h / | tail -1 | awk '{printf "   Before: Used %s / %s (%s)\n\n", $3, $2, $5}'
 
-    # 2. apt cache
-    echo -e "▶ ${CYAN}[2/7]${NC} Clearing apt cache..."
-    $SSH "sudo apt-get clean -qq"
-    echo -e "   ${GREEN}Done${NC}"
+        step "1/7" "Clearing pip cache..."
+        pip cache purge 2>/dev/null || true
+        rm -rf ~/.cache/pip/ 2>/dev/null
+        sudo rm -rf /root/.cache/pip/ 2>/dev/null
+        ok
 
-    # 3. Journal logs (keep 1 day)
-    echo -e "▶ ${CYAN}[3/7]${NC} Trimming journal logs (keeping 1 day)..."
-    $SSH "sudo journalctl --vacuum-time=1d --vacuum-size=16M 2>&1 | tail -1"
-    echo -e "   ${GREEN}Done${NC}"
+        step "2/7" "Clearing apt cache..."
+        sudo apt-get clean -qq
+        ok
 
-    # 4. PyTorch test binaries (unused, ~28MB)
-    echo -e "▶ ${CYAN}[4/7]${NC} Removing PyTorch test binaries..."
-    $SSH "rm -rf /opt/pcb-inspect/venv/lib/python3.11/site-packages/torch/bin/test_* 2>/dev/null" || true
-    echo -e "   ${GREEN}Done${NC}"
+        step "3/7" "Trimming journal logs (keeping 1 day)..."
+        sudo journalctl --vacuum-time=1d --vacuum-size=16M 2>&1 | tail -1
+        ok
 
-    # 5. __pycache__
-    echo -e "▶ ${CYAN}[5/7]${NC} Clearing __pycache__..."
-    $SSH "find /opt/pcb-inspect/ -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null" || true
-    echo -e "   ${GREEN}Done${NC}"
+        step "4/7" "Removing PyTorch test binaries..."
+        rm -rf /opt/pcb-inspect/venv/lib/python3.11/site-packages/torch/bin/test_* 2>/dev/null
+        ok
 
-    # 6. /tmp cleanup
-    echo -e "▶ ${CYAN}[6/7]${NC} Cleaning /tmp (files older than 2 days)..."
-    $SSH "sudo find /tmp -type f -atime +2 -delete 2>/dev/null" || true
-    echo -e "   ${GREEN}Done${NC}"
+        step "5/7" "Clearing __pycache__..."
+        find /opt/pcb-inspect/ -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+        ok
 
-    # 7. Old kernels
-    echo -e "▶ ${CYAN}[7/7]${NC} Removing old kernels..."
-    $SSH "sudo apt-get autoremove -y -qq 2>&1 | tail -2"
-    echo -e "   ${GREEN}Done${NC}"
+        step "6/7" "Cleaning /tmp (files older than 2 days)..."
+        sudo find /tmp -type f -atime +2 -delete 2>/dev/null || true
+        ok
 
-    echo ""
-    $SSH "df -h / | tail -1 | awk '{printf \"   After:  Used %s / %s (%s)\n\", \$3, \$2, \$5}'"
+        step "7/7" "Removing old kernels..."
+        sudo apt-get autoremove -y -qq 2>&1 | tail -2
+        ok
+
+        echo ""
+        df -h / | tail -1 | awk '{printf "   After:  Used %s / %s (%s)\n", $3, $2, $5}'
+REMOTE_SCRIPT
+
     echo ""
     echo -e "${GREEN}${BOLD}✓ Cleanup complete!${NC}"
 }
