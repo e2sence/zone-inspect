@@ -265,6 +265,11 @@ def logout():
     return resp
 
 
+@app.route("/help")
+def help_page():
+    return render_template("help.html")
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 def _allowed(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXT

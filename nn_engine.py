@@ -631,16 +631,17 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
         # Safety net: если и global_sim и SSIM очень низкие — не верим OK
         if ssim_val < safety_ssim and global_sim < safety_sim:
             defect_pct = max(defect_pct, cfg.SAFETY_DEFECT_OVERRIDE_PCT)
-            verdict = "Дефект ❌ — структурные различия (низкий SSIM/similarity)"
+            # verdict = "Дефект ❌ — структурные различия (низкий SSIM/similarity)"
+            verdict = "Defect ❌ — structural differences (low SSIM/similarity)"
             status = "defect"
         else:
-            verdict = "OK ✅ — различий не обнаружено"
+            verdict = "OK ✅ — no differences detected"
             status = "ok"
     elif defect_pct < warn_thr:
-        verdict = "Внимание ⚠️ — незначительные различия"
+        verdict = "Warning ⚠️ — minor differences"
         status = "warn"
     else:
-        verdict = "Дефект ❌ — обнаружены существенные различия"
+        verdict = "Defect ❌ — significant differences detected"
         status = "defect"
 
     # Всегда рисуем контуры дефектов (для ok — полупрозрачно)

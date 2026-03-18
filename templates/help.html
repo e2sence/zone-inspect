@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PCB Zone Check — Help</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0c10;
+            --bg2: #0d1017;
+            --card: #111318;
+            --card2: #161920;
+            --accent: #3b82f6;
+            --accent-hover: #60a5fa;
+            --accent-dim: rgba(59, 130, 246, .12);
+            --text: #c9d1d9;
+            --text-bright: #e6edf3;
+            --muted: #6e7681;
+            --border: #21262d;
+            --border-light: #30363d;
+            --success: #2ea043;
+            --warn: #d29922;
+            --danger: #f85149;
+            --mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+            --radius: 3px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box }
+
+        body {
+            font-family: var(--mono);
+            font-size: 12px;
+            line-height: 1.6;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 12px 16px;
+        }
+
+        /* Header */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+        header h1 { font-size: 14px; font-weight: 600; color: var(--text-bright) }
+        header p { font-size: 10px; color: var(--muted); margin-top: 1px }
+        .hdr-links { display: flex; gap: 10px; align-items: center }
+        .hdr-links a {
+            font-size: 11px;
+            color: var(--muted);
+            text-decoration: none;
+            border: 1px solid var(--border);
+            padding: 4px 10px;
+            border-radius: 6px;
+            transition: color .2s, border-color .2s;
+        }
+        .hdr-links a:hover { color: var(--text); border-color: var(--border-light) }
+        .hdr-links a.active { color: var(--accent); border-color: var(--accent) }
+
+        /* Search */
+        .search-bar {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: var(--bg);
+            padding: 8px 0 10px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 16px;
+        }
+        .search-wrap {
+            position: relative;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        .search-wrap input {
+            width: 100%;
+            background: var(--card);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-family: var(--mono);
+            font-size: 12px;
+            padding: 8px 34px 8px 12px;
+            border-radius: var(--radius);
+            outline: none;
+            transition: border-color .2s;
+        }
+        .search-wrap input:focus { border-color: var(--accent) }
+        .search-wrap input::placeholder { color: var(--muted) }
+        .search-clear {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: var(--muted);
+            font-size: 14px;
+            cursor: pointer;
+            display: none;
+        }
+        .search-clear.show { display: block }
+        .search-count {
+            text-align: center;
+            font-size: 10px;
+            color: var(--muted);
+            margin-top: 4px;
+        }
+
+        /* Two-column layout */
+        .cols {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            align-items: start;
+        }
+        .col-en, .col-ru {
+            min-width: 0;
+        }
+        .col-label {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 12px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* Sections */
+        .section {
+            margin-bottom: 20px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+        .section.hidden { display: none }
+        .section-hdr {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: var(--card2);
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            user-select: none;
+        }
+        .section-hdr:hover { background: var(--bg2) }
+        .section-num {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--accent);
+            background: var(--accent-dim);
+            padding: 1px 6px;
+            border-radius: var(--radius);
+            min-width: 20px;
+            text-align: center;
+        }
+        .section-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-bright);
+            flex: 1;
+        }
+        .section-arrow {
+            font-size: 10px;
+            color: var(--muted);
+            transition: transform .2s;
+        }
+        .section.open .section-arrow { transform: rotate(90deg) }
+        .section-body {
+            padding: 10px 12px;
+            display: none;
+        }
+        .section.open .section-body { display: block }
+        .section-body p {
+            margin-bottom: 6px;
+            color: var(--text);
+        }
+        .section-body h4 {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--accent);
+            margin: 10px 0 4px;
+        }
+        .section-body h4:first-child { margin-top: 0 }
+        .section-body ul {
+            margin: 4px 0 6px 16px;
+            color: var(--text);
+        }
+        .section-body li { margin-bottom: 3px }
+        .section-body code {
+            background: var(--card2);
+            border: 1px solid var(--border);
+            padding: 1px 4px;
+            border-radius: 2px;
+            font-size: 11px;
+            color: var(--accent);
+        }
+        .kbd {
+            display: inline-block;
+            background: var(--card2);
+            border: 1px solid var(--border-light);
+            padding: 0 4px;
+            border-radius: 3px;
+            font-size: 10px;
+            color: var(--text-bright);
+            line-height: 1.7;
+        }
+        .tag-ok { color: var(--success); font-weight: 600 }
+        .tag-warn { color: var(--warn); font-weight: 600 }
+        .tag-def { color: var(--danger); font-weight: 600 }
+        .note {
+            background: var(--accent-dim);
+            border-left: 3px solid var(--accent);
+            padding: 6px 10px;
+            margin: 6px 0;
+            font-size: 11px;
+            border-radius: 0 var(--radius) var(--radius) 0;
+        }
+        mark {
+            background: rgba(59, 130, 246, .3);
+            color: var(--text-bright);
+            border-radius: 2px;
+            padding: 0 2px;
+        }
+
+        @media (max-width: 900px) {
+            .cols { grid-template-columns: 1fr; gap: 32px }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>PCB Zone Check</h1>
+                <p>// user guide &amp; reference</p>
+            </div>
+            <div class="hdr-links">
+                <a href="/">Back to App</a>
+            </div>
+        </header>
+
+        <div class="search-bar">
+            <div class="search-wrap">
+                <input type="text" id="help-search" placeholder="Search keywords... / Поиск по ключевым словам...">
+                <button class="search-clear" id="search-clear">&times;</button>
+            </div>
+            <div class="search-count" id="search-count"></div>
+        </div>
+
+        <div class="cols">
+            <!-- ═══ ENGLISH ═══ -->
+            <div class="col-en">
+                <div class="col-label">English</div>
+
+                <!-- 1. Getting Started -->
+                <div class="section open" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">1</span>
+                        <span class="section-title">Getting Started</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Login</h4>
+                        <p>Open the application URL. Enter your access key on the login page. The key is provided by the administrator and maps to your operator name. The session persists for 30 days.</p>
+                        <h4>Interface Overview</h4>
+                        <p>The system uses a 3-step wizard:</p>
+                        <ul>
+                            <li><strong>Step 1 — Upload:</strong> upload a reference board photo or load a saved template.</li>
+                            <li><strong>Step 2 — Zones:</strong> draw inspection zones on the reference image.</li>
+                            <li><strong>Step 3 — Check:</strong> take zone photos, run analysis, review results.</li>
+                        </ul>
+                        <p>Click the <strong>Step 1</strong> indicator at any time to reset and start over.</p>
+                        <h4>Sensitivity Controls</h4>
+                        <p>In the header, two inputs control detection strictness:</p>
+                        <ul>
+                            <li><strong>Zone</strong> (0.00–2.00) — sensitivity for zone-level defect detection. Default: 0.50.</li>
+                            <li><strong>Subzone</strong> (0.00–2.00) — sensitivity for subzone-level analysis. Default: 0.51.</li>
+                        </ul>
+                        <p>Higher values = stricter detection (more defects flagged). Lower values = more lenient.</p>
+                    </div>
+                </div>
+
+                <!-- 2. Uploading Reference -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">2</span>
+                        <span class="section-title">Uploading a Reference Board</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Single Image</h4>
+                        <p>Drag and drop (or click to browse) a single photo of the reference PCB into the upload area. Supported formats: PNG, JPG, JPEG, BMP, WebP.</p>
+                        <h4>Multi-Image Blending</h4>
+                        <p>Upload 2+ photos of the same board. The system shows a blending panel:</p>
+                        <ul>
+                            <li><strong>Manual blend:</strong> adjust X/Y offset and Scale sliders for each image. Click "Blend (manual)" to merge.</li>
+                            <li><strong>Auto-align (SIFT):</strong> automatically aligns images using feature matching, then averages. Best for slightly shifted shots.</li>
+                            <li><strong>Readjust:</strong> go back to the slider interface after viewing the result.</li>
+                        </ul>
+                        <p>Multi-image blending reduces noise and produces a cleaner reference.</p>
+                    </div>
+                </div>
+
+                <!-- 3. Templates -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">3</span>
+                        <span class="section-title">Templates</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Saved Templates</h4>
+                        <p>Templates store the reference image + zone layout for reuse. They appear as cards in Step 1 with name, barcode mask, version number, zone count, and creation date.</p>
+                        <h4>Load</h4>
+                        <p>Click "Load" on a template card to jump directly to Step 3 (inspection) with all zones pre-configured. A "Recipe" badge appears showing the template name.</p>
+                        <h4>Save as Template</h4>
+                        <p>In Step 2 after drawing zones, enter a name and optional barcode mask, then click "Save Template". The reference image is stored in cloud storage (R2).</p>
+                        <h4>Edit Template</h4>
+                        <p>Click "Edit" on a template card to open the full-screen template editor. You can:</p>
+                        <ul>
+                            <li>Add, rename, delete, and reorder zones (drag the handle).</li>
+                            <li>Draw anchor points and subzones (see below).</li>
+                            <li>Change template name and barcode mask.</li>
+                            <li>Zoom the canvas: <span class="kbd">Ctrl</span>+scroll or +/- buttons (100%–800%).</li>
+                        </ul>
+                        <h4>Versioning</h4>
+                        <p>Click "Save changes" to create a new version. Previous versions are archived and visible in the sidebar. Click any older version to restore it (creates a new version).</p>
+                        <h4>Delete Template</h4>
+                        <p>Click "Delete" on the template card. Confirmation required.</p>
+                        <h4>Barcode Mask</h4>
+                        <p>A prefix string (e.g. "7334") that validates scanned serial numbers. If the scanned code does not start with this mask, a "Mask mismatch" warning appears during inspection.</p>
+                    </div>
+                </div>
+
+                <!-- 4. Drawing Zones -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">4</span>
+                        <span class="section-title">Drawing Inspection Zones</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Draw Zones</h4>
+                        <p>In Step 2, click and drag on the reference image to draw rectangular zones. Each zone is auto-labeled ("Zone 1", "Zone 2", etc.) and color-coded.</p>
+                        <h4>Zone Controls</h4>
+                        <ul>
+                            <li><strong>Rename:</strong> edit the text field on a zone chip.</li>
+                            <li><strong>Select:</strong> click the color dot to highlight the zone on the canvas.</li>
+                            <li><strong>Delete:</strong> click X on the zone chip.</li>
+                            <li><strong>Undo last / Clear all:</strong> buttons below the canvas.</li>
+                        </ul>
+                        <h4>Anchor Points</h4>
+                        <p>Click the crosshair icon on a zone chip to enter anchor mode. Place up to 2 anchor points on or near the zone. Anchors provide alignment guidance on the mobile camera — the phone shows where to position the board relative to detected features.</p>
+                        <h4>Subzones</h4>
+                        <p>Click the square icon on a zone chip to enter subzone mode. Draw up to 10 smaller rectangles inside the zone. Subzones trigger a separate, stricter analysis pass. Each subzone has its own status, defect %, and images. The zone's overall status = the worst status among all its subzones.</p>
+                        <h4>Canvas Zoom</h4>
+                        <p><span class="kbd">Ctrl</span>+scroll or use +/- buttons. Range: 100%–800%.</p>
+                        <h4>Save & Start</h4>
+                        <p>Click "Save zones & start check" to lock zones and proceed to Step 3.</p>
+                    </div>
+                </div>
+
+                <!-- 5. Inspection Process -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">5</span>
+                        <span class="section-title">Inspection Process</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Serial Number Scanning</h4>
+                        <p>Before checking zones, scan a barcode / QR code / DataMatrix for the board serial number. Upload a photo from desktop or use the mobile camera. The zone check area is locked until a serial is scanned. The decoded value appears with its type (e.g. QR_CODE, CODE_128).</p>
+                        <h4>Taking Zone Photos (Desktop)</h4>
+                        <p>Drag and drop one or more zone photos into the upload area, then click "Run Check". Multiple files are processed sequentially with a progress counter ("[1/5]", "[2/5]", etc.).</p>
+                        <h4>Zone Matching</h4>
+                        <p>Each uploaded photo is automatically matched to the best-fitting zone using a multi-stage pipeline:</p>
+                        <ul>
+                            <li>Global alignment (SIFT or neural network) to warp the input to the reference.</li>
+                            <li>Zone crop extraction and SSIM pre-ranking of all zones.</li>
+                            <li>Top-3 neural scoring (EfficientNet-B4) for final match.</li>
+                            <li>Match score must exceed 0.55 threshold. Otherwise "NO MATCH".</li>
+                            <li>Already-OK zones are deprioritized.</li>
+                        </ul>
+                        <h4>Defect Analysis</h4>
+                        <p>The matched zone is compared against the reference to detect defects:</p>
+                        <ul>
+                            <li><strong>Neural mode:</strong> EfficientNet-B4 patch-based CNN comparison + global similarity + SSIM.</li>
+                            <li><strong>OpenCV fallback:</strong> CLAHE normalization, SSIM, absolute difference, edge analysis, adaptive thresholding, contour-based measurement.</li>
+                        </ul>
+                        <p>Output: SSIM score, defect percentage, defect region count, status (<span class="tag-ok">OK</span> / <span class="tag-warn">WARN</span> / <span class="tag-def">DEFECT</span>), and visualization images (defect map, heatmap, extracted zone, reference crop).</p>
+                        <h4>Subzone Analysis</h4>
+                        <p>If the zone has subzones defined, each subzone is analyzed separately with stricter thresholds. The zone status = worst of (zone result, all subzone results).</p>
+                        <h4>Result Display</h4>
+                        <p>After each check: 5 images (input, reference, extracted, defect map, heatmap), statistics (score, SSIM, defect %), a bar chart of all zone scores, and subzone details if applicable. Click any image for a full-size lightbox.</p>
+                    </div>
+                </div>
+
+                <!-- 6. Decisions & Saving -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">6</span>
+                        <span class="section-title">Decisions & Saving Results</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Calculated vs Accepted Result</h4>
+                        <p>Each zone and subzone has two results:</p>
+                        <ul>
+                            <li><strong>Calculated (auto):</strong> determined by the defect analysis algorithm.</li>
+                            <li><strong>Accepted (user decision):</strong> manually set by the operator via a dropdown.</li>
+                        </ul>
+                        <p>If the operator overrides the calculated result, the original is shown crossed out with an arrow to the accepted status plus a pencil icon.</p>
+                        <h4>Overall Result</h4>
+                        <p>The overall inspection status is the <strong>worst effective status</strong> across all zones. Effective = user zone override > worst subzone override > calculated status. Any <span class="tag-def">DEFECT</span> makes the whole inspection a defect. Any <span class="tag-warn">WARN</span> (with no defect) makes it a warning.</p>
+                        <h4>User Decision Override</h4>
+                        <ul>
+                            <li><strong>Zone-level:</strong> dropdown on each zone chip or in the lightbox.</li>
+                            <li><strong>Subzone-level:</strong> dropdown next to each subzone. Changing subzone decisions recalculates the zone's effective status.</li>
+                        </ul>
+                        <h4>Auto-Accept</h4>
+                        <p>Toggle the "auto" switch next to the progress bar. When all zones are <span class="tag-ok">OK</span> and auto-accept is ON, the result is auto-saved and a new board starts after 3 seconds.</p>
+                        <h4>Close & Save</h4>
+                        <p>Click "Close & Save" to save the inspection (complete or partial) and reset for the next board. If a result was auto-saved, it updates with the latest user decisions.</p>
+                        <h4>Skip Board</h4>
+                        <p>Abandon the current board without saving. Resets the session.</p>
+                        <h4>Retry Failed Zones</h4>
+                        <p>Clear only non-OK zones for re-photographing without resetting the entire board.</p>
+                    </div>
+                </div>
+
+                <!-- 7. Mobile Camera -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">7</span>
+                        <span class="section-title">Mobile Camera</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Connecting</h4>
+                        <p>In Step 3, a QR code and URL are shown. Scan with your phone to open the mobile companion page. No separate login required.</p>
+                        <h4>Serial Scanning</h4>
+                        <p>The "Serial" tab provides live camera barcode scanning. The camera feed shows a scan reticle with an animated scan line. A beep sound plays on successful detection. You can also choose an image from the gallery.</p>
+                        <h4>Zone Photos</h4>
+                        <p>The "Zone" tab shows which zone to photograph next. Navigate between zones with left/right arrows.</p>
+                        <h4>Anchor Alignment</h4>
+                        <p>If anchor points are defined for the zone, the camera feed shows dashed guide circles at target positions. Real-time template matching detects anchors in the live video. When aligned (solid green circles + checkmark), press "Capture Zone".</p>
+                        <h4>Capture & Upload</h4>
+                        <p>Press "Capture Zone" to take a photo. A shutter sound plays. The photo is queued for the desktop, which processes it automatically (polls every 5 seconds). Multiple photos can also be uploaded from the gallery.</p>
+                        <h4>Mobile Actions</h4>
+                        <ul>
+                            <li><strong>Skip -> New SN:</strong> save current result and start a new board from mobile.</li>
+                            <li><strong>Retry Failed:</strong> re-scan only failed zones.</li>
+                        </ul>
+                        <p>The mobile page continuously polls the server (every 5 seconds) to sync state with the desktop.</p>
+                    </div>
+                </div>
+
+                <!-- 8. Inspection History -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">8</span>
+                        <span class="section-title">Inspection History</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Viewing History</h4>
+                        <p>Scroll to the bottom of the page and click "Inspection History" to expand the panel. Each row shows: date, time, serial, template name, operator, zone count, overall status, and inline stats (OK/defect/warn counts, avg score, max defect %). Overridden results have a pencil icon.</p>
+                        <h4>Search & Filter</h4>
+                        <p>Type in the search box. Format: <code>serial / template / operator</code>. Supports <code>*</code> wildcards. Each part filters the corresponding field. Example: <code>7334* / Module XY / John</code>.</p>
+                        <h4>Detail View</h4>
+                        <p>Click a row to expand it. Shows: stats row, doughnut pie chart (OK/Defect/Warn distribution), per-zone score bars, zone image cards with status badges and defect %. Subzone cards shown with a red left border.</p>
+                        <h4>Zone Comparison</h4>
+                        <p>Click any zone image card to open a full-size side-by-side comparison of the captured photo vs the reference.</p>
+                        <h4>Overridden Results in History</h4>
+                        <p>When the accepted status differs from the calculated one, the zone card shows: <span style="text-decoration:line-through;color:var(--muted)">calculated</span> <span style="color:var(--muted)">-></span> <strong>accepted</strong>. Same for subzones.</p>
+                        <h4>Print Passport</h4>
+                        <p>Click "Print" on any history row to generate a formal inspection passport document with all metadata, zone table (with overrides shown), score charts, and zone images. Opens the browser print dialog.</p>
+                        <h4>Pagination</h4>
+                        <p>History loads in pages of 20. Click "Load more" to see older results.</p>
+                    </div>
+                </div>
+
+                <!-- 9. Statistics -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">9</span>
+                        <span class="section-title">Statistics Dashboard</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <p>Appears in Step 3 after the first zone is checked. Displays:</p>
+                        <ul>
+                            <li><strong>Summary counters:</strong> total checked, OK, Warn, Defect, average SSIM, average defect %.</li>
+                            <li><strong>Match scores chart:</strong> bar chart of match scores per zone, color-coded by status.</li>
+                            <li><strong>Defect % chart:</strong> defect percentage per zone.</li>
+                            <li><strong>SSIM chart:</strong> SSIM per zone (green >= 45%, yellow >= 30%, red < 30%).</li>
+                            <li><strong>Data table:</strong> zone status, score, SSIM, defect %, defect count.</li>
+                        </ul>
+                        <p>All charts and counters update in real-time as zones are checked.</p>
+                    </div>
+                </div>
+
+                <!-- 10. Progress & Mini-Map -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">10</span>
+                        <span class="section-title">Progress Tracking & Mini-Map</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Zone Status Chips</h4>
+                        <p>Color-coded chips below the check panel: <span class="tag-ok">green</span> = OK, <span class="tag-warn">yellow</span> = WARN, <span class="tag-def">red</span> = DEFECT, blue = unchecked. Shows effective status (with overrides). Click to view that zone's result.</p>
+                        <h4>Progress Bar</h4>
+                        <p>Shows "N/M zones checked" with a percentage fill bar.</p>
+                        <h4>Reference Mini-Map</h4>
+                        <p>Small canvas showing the full reference board with zone overlays. Unchecked zones pulsate; checked zones show their status color and a check/warn/defect marker.</p>
+                        <h4>Completion Banner</h4>
+                        <p>When all zones are checked: "ALL ZONES OK" (green) or "ISSUES FOUND" (yellow). Shows serial number if scanned. Action buttons appear for saving, skipping, or retrying.</p>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- ═══ RUSSIAN ═══ -->
+            <div class="col-ru">
+                <div class="col-label">Русский</div>
+
+                <!-- 1 -->
+                <div class="section open" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">1</span>
+                        <span class="section-title">Начало работы</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Вход в систему</h4>
+                        <p>Откройте URL приложения. На странице входа введите ключ доступа, выданный администратором. Ключ привязан к имени оператора. Сеанс сохраняется 30 дней.</p>
+                        <h4>Обзор интерфейса</h4>
+                        <p>Система работает в 3 шага:</p>
+                        <ul>
+                            <li><strong>Шаг 1 — Загрузка:</strong> загрузка эталонного фото платы или выбор сохранённого шаблона.</li>
+                            <li><strong>Шаг 2 — Зоны:</strong> рисование зон инспекции на эталонном изображении.</li>
+                            <li><strong>Шаг 3 — Проверка:</strong> фотографирование зон, анализ, просмотр результатов.</li>
+                        </ul>
+                        <p>Нажатие на индикатор <strong>Шаг 1</strong> в любой момент сбрасывает сессию и возвращает к началу.</p>
+                        <h4>Настройки чувствительности</h4>
+                        <p>В заголовке страницы два поля:</p>
+                        <ul>
+                            <li><strong>Zone</strong> (0.00–2.00) — чувствительность детектирования дефектов на уровне зоны. По умолчанию: 0.50.</li>
+                            <li><strong>Subzone</strong> (0.00–2.00) — чувствительность на уровне подзон. По умолчанию: 0.51.</li>
+                        </ul>
+                        <p>Большее значение = строже (больше дефектов определяется). Меньшее = мягче.</p>
+                    </div>
+                </div>
+
+                <!-- 2 -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">2</span>
+                        <span class="section-title">Загрузка эталона платы</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Одно изображение</h4>
+                        <p>Перетащите (или выберите через диалог) одно фото эталонной платы в область загрузки. Форматы: PNG, JPG, JPEG, BMP, WebP.</p>
+                        <h4>Блендинг нескольких фото</h4>
+                        <p>Загрузите 2+ фото одной и той же платы. Система покажет панель блендинга:</p>
+                        <ul>
+                            <li><strong>Ручной блендинг:</strong> ползунки X/Y смещение и масштаб для каждого изображения. Нажмите "Blend (manual)".</li>
+                            <li><strong>Auto-align (SIFT):</strong> автоматическое выравнивание по особым точкам, затем усреднение. Лучший вариант при небольшом сдвиге кадров.</li>
+                            <li><strong>Readjust:</strong> вернуться к ползункам после просмотра результата.</li>
+                        </ul>
+                        <p>Блендинг нескольких фото уменьшает шум и даёт более чистый эталон.</p>
+                    </div>
+                </div>
+
+                <!-- 3 -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">3</span>
+                        <span class="section-title">Шаблоны</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Сохранённые шаблоны</h4>
+                        <p>Шаблоны хранят эталонное изображение + разметку зон для повторного использования. Отображаются карточками в Шаге 1: имя, маска штрихкода, версия, количество зон, дата создания.</p>
+                        <h4>Загрузить шаблон</h4>
+                        <p>Нажмите "Load" на карточке — сразу переход к Шагу 3 с готовыми зонами. Появляется бейдж "Recipe" с именем шаблона.</p>
+                        <h4>Сохранить как шаблон</h4>
+                        <p>В Шаге 2, после рисования зон, введите имя и опционально маску штрихкода, нажмите "Save Template".</p>
+                        <h4>Редактирование шаблона</h4>
+                        <p>Нажмите "Edit" — откроется полноэкранный редактор. Возможности:</p>
+                        <ul>
+                            <li>Добавление, переименование, удаление и перетаскивание зон (ручка-захват).</li>
+                            <li>Рисование якорных точек и подзон (см. ниже).</li>
+                            <li>Изменение имени и маски штрихкода.</li>
+                            <li>Масштаб холста: <span class="kbd">Ctrl</span>+scroll или кнопки +/- (100%–800%).</li>
+                        </ul>
+                        <h4>Версионирование</h4>
+                        <p>"Save changes" создаёт новую версию. Предыдущие версии видны в боковой панели. Нажатие на старую версию восстанавливает её (создаётся новая версия).</p>
+                        <h4>Удаление шаблона</h4>
+                        <p>Кнопка "Delete" на карточке. Требуется подтверждение.</p>
+                        <h4>Маска штрихкода</h4>
+                        <p>Префикс (например "7334"), по которому валидируются сканированные серийные номера. Если код не начинается с маски — предупреждение "Mask mismatch".</p>
+                    </div>
+                </div>
+
+                <!-- 4 -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">4</span>
+                        <span class="section-title">Разметка зон инспекции</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Рисование зон</h4>
+                        <p>В Шаге 2 кликните и перетащите мышь по эталонному изображению для создания прямоугольной зоны. Зоны автоматически нумеруются ("Zone 1", "Zone 2"...) и раскрашиваются.</p>
+                        <h4>Управление зонами</h4>
+                        <ul>
+                            <li><strong>Переименовать:</strong> редактируйте текстовое поле на чипе зоны.</li>
+                            <li><strong>Выбрать:</strong> нажмите на цветную точку — зона подсвечивается на холсте.</li>
+                            <li><strong>Удалить:</strong> кнопка X на чипе зоны.</li>
+                            <li><strong>Undo last / Clear all:</strong> кнопки под холстом.</li>
+                        </ul>
+                        <h4>Якорные точки (Anchors)</h4>
+                        <p>Нажмите значок прицела на чипе зоны. Поставьте до 2 якорных точек на изображении. При съёмке с мобильного камера покажет ориентиры для выравнивания платы.</p>
+                        <h4>Подзоны (Subzones)</h4>
+                        <p>Нажмите значок квадрата на чипе. Нарисуйте до 10 прямоугольников внутри зоны. Подзоны анализируются отдельно с более строгими порогами. У каждой подзоны свой статус, % дефектов и изображения. Итоговый статус зоны = наихудший среди всех подзон.</p>
+                        <h4>Масштаб холста</h4>
+                        <p><span class="kbd">Ctrl</span>+scroll или кнопки +/-. Диапазон: 100%–800%.</p>
+                        <h4>Сохранить и начать</h4>
+                        <p>Нажмите "Save zones & start check" для фиксации зон и перехода к Шагу 3.</p>
+                    </div>
+                </div>
+
+                <!-- 5 -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">5</span>
+                        <span class="section-title">Процесс инспекции</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Сканирование серийного номера</h4>
+                        <p>Перед проверкой зон отсканируйте штрихкод / QR-код / DataMatrix для идентификации платы. Загрузите фото с ПК или используйте мобильную камеру. Проверка зон заблокирована до сканирования. Распознанное значение отображается с типом кода (QR_CODE, CODE_128 и т.д.).</p>
+                        <h4>Фото зон (с ПК)</h4>
+                        <p>Перетащите одно или несколько фото зон в область загрузки, нажмите "Run Check". Файлы обрабатываются последовательно со счётчиком прогресса ("[1/5]", "[2/5]" и т.д.).</p>
+                        <h4>Сопоставление зон</h4>
+                        <p>Каждое фото автоматически сопоставляется с наиболее подходящей зоной через многоэтапный анализ:</p>
+                        <ul>
+                            <li>Глобальное выравнивание (SIFT или нейросеть) входного фото по эталону.</li>
+                            <li>Вырезка областей зон и предварительное SSIM-ранжирование.</li>
+                            <li>Топ-3 нейронный скоринг (EfficientNet-B4) для финального выбора.</li>
+                            <li>Порог совпадения: 0.55. Ниже — "NO MATCH".</li>
+                            <li>Уже проверенные (ОК) зоны имеют пониженный приоритет.</li>
+                        </ul>
+                        <h4>Анализ дефектов</h4>
+                        <p>Сопоставленная зона сравнивается с эталоном:</p>
+                        <ul>
+                            <li><strong>Нейросетевой режим:</strong> EfficientNet-B4, патч-анализ CNN, глобальное сходство, SSIM.</li>
+                            <li><strong>OpenCV-фоллбек:</strong> CLAHE нормализация, SSIM, абсолютная разница, анализ краёв, адаптивная пороговая обработка, контурное измерение площади.</li>
+                        </ul>
+                        <p>Результат: SSIM, % дефектов, количество регионов, статус (<span class="tag-ok">OK</span> / <span class="tag-warn">WARN</span> / <span class="tag-def">DEFECT</span>), визуализация (карта дефектов, тепловая карта, вырезанная зона, эталонный кроп).</p>
+                        <h4>Анализ подзон</h4>
+                        <p>Если у зоны есть подзоны — каждая анализируется отдельно с более строгими порогами. Итоговый статус зоны = наихудший из (статус зоны, все статусы подзон).</p>
+                        <h4>Отображение результатов</h4>
+                        <p>После каждой проверки: 5 изображений (вход, эталон, вырезка, карта дефектов, тепловая карта), статистика, столбчатая диаграмма оценок всех зон, подзоны (если есть). Клик по изображению — полноразмерный просмотр в лайтбоксе.</p>
+                    </div>
+                </div>
+
+                <!-- 6 -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">6</span>
+                        <span class="section-title">Решения и сохранение результатов</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Расчётный и принятый результат</h4>
+                        <p>У каждой зоны и подзоны два результата:</p>
+                        <ul>
+                            <li><strong>Расчётный (авто):</strong> определён алгоритмом анализа дефектов.</li>
+                            <li><strong>Принятый (решение оператора):</strong> вручную установлен оператором через выпадающий список.</li>
+                        </ul>
+                        <p>Если оператор изменил результат, исходный отображается зачёркнутым со стрелкой к принятому статусу и значком карандаша.</p>
+                        <h4>Общий результат</h4>
+                        <p>Итоговый статус инспекции — <strong>наихудший эффективный статус</strong> всех зон. Эффективный = переопределение зоны > наихудшее переопределение подзон > расчётный. Любой <span class="tag-def">DEFECT</span> делает всю инспекцию дефектной. Любой <span class="tag-warn">WARN</span> (без дефектов) — предупреждение.</p>
+                        <h4>Переопределение решения</h4>
+                        <ul>
+                            <li><strong>Уровень зоны:</strong> выпадающий список на чипе зоны или в лайтбоксе.</li>
+                            <li><strong>Уровень подзоны:</strong> выпадающий список рядом с каждой подзоной. Изменение пересчитывает эффективный статус зоны.</li>
+                        </ul>
+                        <h4>Авто-принятие</h4>
+                        <p>Переключатель "auto" рядом с прогресс-баром. Когда все зоны <span class="tag-ok">OK</span> и авто-принятие включено — результат автоматически сохраняется и через 3 секунды начинается новая плата.</p>
+                        <h4>Закрыть и сохранить</h4>
+                        <p>"Close & Save" — сохраняет инспекцию (полную или частичную) и сбрасывает для следующей платы.</p>
+                        <h4>Пропустить плату</h4>
+                        <p>Отменить текущую плату без сохранения. Сессия сбрасывается.</p>
+                        <h4>Перепроверить дефектные</h4>
+                        <p>Очищает только не-ОК зоны для повторной съёмки без сброса всей платы.</p>
+                    </div>
+                </div>
+
+                <!-- 7 -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">7</span>
+                        <span class="section-title">Мобильная камера</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Подключение</h4>
+                        <p>В Шаге 3 отображаются QR-код и URL. Отсканируйте телефоном для открытия мобильной страницы. Отдельный вход не требуется.</p>
+                        <h4>Сканирование серийного номера</h4>
+                        <p>Вкладка "Serial" — живая камера со сканирующей рамкой и анимированной линией. При распознавании звучит сигнал. Также можно выбрать фото из галереи.</p>
+                        <h4>Фото зон</h4>
+                        <p>Вкладка "Zone" показывает какую зону нужно снять. Переключение между зонами стрелками влево/вправо.</p>
+                        <h4>Выравнивание по якорям</h4>
+                        <p>Если у зоны заданы якорные точки — на видео камеры показываются штриховые круги-ориентиры. В реальном времени определяются позиции якорей на изображении. При совпадении (зелёные круги + галочка) — можно снимать.</p>
+                        <h4>Съёмка и загрузка</h4>
+                        <p>"Capture Zone" — снимок. Звук затвора. Фото ставится в очередь для десктопа, где обрабатывается автоматически (опрос каждые 5 секунд). Также можно загрузить несколько фото из галереи.</p>
+                        <h4>Действия с мобильного</h4>
+                        <ul>
+                            <li><strong>Skip -> New SN:</strong> сохранить текущий результат и начать новую плату.</li>
+                            <li><strong>Retry Failed:</strong> пересканировать только дефектные зоны.</li>
+                        </ul>
+                        <p>Мобильная страница опрашивает сервер каждые 5 секунд для синхронизации состояния с десктопом.</p>
+                    </div>
+                </div>
+
+                <!-- 8 -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">8</span>
+                        <span class="section-title">История инспекций</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Просмотр истории</h4>
+                        <p>Прокрутите страницу вниз и нажмите "Inspection History" для раскрытия панели. Каждая строка: дата, время, серийный номер, шаблон, оператор, количество зон, итоговый статус, краткая статистика (OK/defect/warn, ср. оценка, макс. % дефектов). Переопределённые результаты помечены значком карандаша.</p>
+                        <h4>Поиск и фильтрация</h4>
+                        <p>Введите в строку поиска. Формат: <code>серийник / шаблон / оператор</code>. Поддерживается <code>*</code> как подстановка. Каждая часть фильтрует соответствующее поле. Пример: <code>7334* / Module XY / John</code>.</p>
+                        <h4>Детальный просмотр</h4>
+                        <p>Нажмите на строку для раскрытия: ряд статистики, кольцевая диаграмма (OK/Defect/Warn), столбцы оценок зон, карточки изображений с бейджами статуса и % дефектов. Карточки подзон имеют красную левую границу.</p>
+                        <h4>Сравнение зон</h4>
+                        <p>Нажмите на карточку изображения зоны — откроется полноразмерное сравнение снимка и эталона бок о бок.</p>
+                        <h4>Переопределения в истории</h4>
+                        <p>Если принятый статус отличается от расчётного, на карточке зоны: <span style="text-decoration:line-through;color:var(--muted)">расчётный</span> <span style="color:var(--muted)">-></span> <strong>принятый</strong>. Аналогично для подзон.</p>
+                        <h4>Печать паспорта</h4>
+                        <p>Кнопка "Print" на строке истории — генерирует формальный документ инспекции со всеми метаданными, таблицей зон (с переопределениями), графиками, изображениями зон. Открывает диалог печати браузера.</p>
+                        <h4>Пагинация</h4>
+                        <p>История загружается по 20 записей. "Load more" для просмотра старых результатов.</p>
+                    </div>
+                </div>
+
+                <!-- 9 -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">9</span>
+                        <span class="section-title">Панель статистики</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <p>Появляется в Шаге 3 после проверки первой зоны. Содержит:</p>
+                        <ul>
+                            <li><strong>Счётчики:</strong> всего проверено, OK, Warn, Defect, средний SSIM, средний % дефектов.</li>
+                            <li><strong>Диаграмма оценок:</strong> столбчатый график оценок совпадения зон, цвет по статусу.</li>
+                            <li><strong>Диаграмма дефектов:</strong> % дефектов по зонам.</li>
+                            <li><strong>Диаграмма SSIM:</strong> SSIM по зонам (зелёный >= 45%, жёлтый >= 30%, красный < 30%).</li>
+                            <li><strong>Таблица:</strong> зона, статус, оценка, SSIM, % дефектов, количество дефектных областей.</li>
+                        </ul>
+                        <p>Все графики и счётчики обновляются в реальном времени по мере проверки зон.</p>
+                    </div>
+                </div>
+
+                <!-- 10 -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">10</span>
+                        <span class="section-title">Прогресс и мини-карта</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <h4>Чипы статуса зон</h4>
+                        <p>Цветные чипы под панелью проверки: <span class="tag-ok">зелёный</span> = OK, <span class="tag-warn">жёлтый</span> = WARN, <span class="tag-def">красный</span> = DEFECT, синий = не проверена. Показывает эффективный статус (с учётом переопределений). Клик — просмотр результата зоны.</p>
+                        <h4>Прогресс-бар</h4>
+                        <p>Показывает "N/M зон проверено" с процентным заполнением.</p>
+                        <h4>Мини-карта эталона</h4>
+                        <p>Маленький холст с полным видом эталонной платы и наложением зон. Непроверенные зоны пульсируют; проверенные показывают статусный цвет и маркер.</p>
+                        <h4>Баннер завершения</h4>
+                        <p>При проверке всех зон: "ALL ZONES OK" (зелёный) или "ISSUES FOUND" (жёлтый). Показывает серийный номер. Кнопки для сохранения, пропуска или перепроверки.</p>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function toggleSection(hdr) {
+            hdr.parentElement.classList.toggle('open');
+        }
+
+        // Search
+        const searchInput = document.getElementById('help-search');
+        const clearBtn = document.getElementById('search-clear');
+        const countEl = document.getElementById('search-count');
+        const allSections = document.querySelectorAll('.section[data-search]');
+
+        function stripHtml(html) {
+            const tmp = document.createElement('div');
+            tmp.innerHTML = html;
+            return tmp.textContent || '';
+        }
+
+        function escapeRe(s) {
+            return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        function highlightText(node, re) {
+            if (node.nodeType === 3) {
+                const m = node.textContent.match(re);
+                if (m) {
+                    const span = document.createElement('span');
+                    span.innerHTML = node.textContent.replace(re, '<mark>$&</mark>');
+                    node.parentNode.replaceChild(span, node);
+                }
+            } else if (node.nodeType === 1 && node.tagName !== 'MARK' && node.tagName !== 'SCRIPT') {
+                Array.from(node.childNodes).forEach(c => highlightText(c, re));
+            }
+        }
+
+        function clearHighlights(root) {
+            root.querySelectorAll('mark').forEach(m => {
+                const parent = m.parentNode;
+                parent.replaceChild(document.createTextNode(m.textContent), m);
+                parent.normalize();
+            });
+            // Unwrap spans inserted by highlightText
+            root.querySelectorAll('span').forEach(s => {
+                if (!s.className && !s.id && s.getAttribute('style') === null
+                    && s.parentNode.tagName !== 'HEADER') {
+                    // Only unwrap bare spans we created
+                    if (s.querySelector('mark') === null && s.children.length === 0) {
+                        const parent = s.parentNode;
+                        while (s.firstChild) parent.insertBefore(s.firstChild, s);
+                        parent.removeChild(s);
+                        parent.normalize();
+                    }
+                }
+            });
+        }
+
+        // Store originals
+        const originals = new Map();
+        allSections.forEach(sec => {
+            originals.set(sec, sec.querySelector('.section-body').innerHTML);
+        });
+
+        function doSearch() {
+            const q = searchInput.value.trim();
+            clearBtn.classList.toggle('show', q.length > 0);
+
+            // Restore originals
+            allSections.forEach(sec => {
+                sec.querySelector('.section-body').innerHTML = originals.get(sec);
+            });
+
+            if (!q) {
+                allSections.forEach(sec => sec.classList.remove('hidden'));
+                countEl.textContent = '';
+                return;
+            }
+
+            const re = new RegExp(escapeRe(q), 'gi');
+            let shown = 0;
+            allSections.forEach(sec => {
+                const body = sec.querySelector('.section-body');
+                const title = sec.querySelector('.section-title').textContent;
+                const text = title + ' ' + stripHtml(body.innerHTML);
+                if (re.test(text)) {
+                    sec.classList.remove('hidden');
+                    sec.classList.add('open');
+                    highlightText(body, new RegExp(escapeRe(q), 'gi'));
+                    shown++;
+                } else {
+                    sec.classList.add('hidden');
+                }
+            });
+            countEl.textContent = shown + ' / ' + allSections.length + ' sections';
+        }
+
+        searchInput.addEventListener('input', doSearch);
+        clearBtn.addEventListener('click', () => {
+            searchInput.value = '';
+            doSearch();
+            searchInput.focus();
+        });
+    </script>
+</body>
+
+</html>
