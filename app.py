@@ -227,7 +227,7 @@ def _check_auth():
 
 
 # Routes that don't require auth
-_PUBLIC_PREFIXES = ("/login", "/static/", "/api/mobile/", "/mobile", "/doc")
+_PUBLIC_PREFIXES = ("/login", "/static/", "/api/mobile/", "/mobile", "/doc", "/license")
 
 
 def _require_read_scope():
@@ -329,6 +329,14 @@ def logout():
 @app.route("/doc")
 def doc_page():
     return render_template("doc.html")
+
+
+@app.route("/license")
+def license_page():
+    license_path = BASE_DIR / "LICENSE"
+    if not license_path.exists():
+        return "LICENSE file not found", 404
+    return send_file(license_path, mimetype="text/plain")
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
