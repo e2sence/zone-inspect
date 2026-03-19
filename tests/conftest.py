@@ -116,3 +116,36 @@ def bright_image():
 def dark_image():
     """Dark image (for glare mask tests)."""
     return np.full((100, 100, 3), 30, dtype=np.uint8)
+
+
+# ---------------------------------------------------------------------------
+#  Composite fixtures for multi-step workflows
+# ---------------------------------------------------------------------------
+@pytest.fixture()
+def session_with_zones(authed_client, test_image_bytes):
+    """Create a session, set 2 zones, return (session_id, zones)."""
+    import io as _io
+    resp = authed_client.post(
+        "/api/session",
+        data={"image": (_io.BytesIO(test_image_bytes), "board.jpg")},
+        content_type="multipart/form-data",
+    )
+    sid = resp.get_json()["session_id"]
+    zones = [
+        {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5, "label": "IC1"},
+        {"x": 0.5, "y": 0.5, "w": 0.4, "h": 0.4, "label": "R1"},
+    ]
+    authed_client.post(f"/api/session/{sid}/zones", json={"zones": zones})
+    return sid, zones
+
+
+@pytest.fixture(scope="session")
+def mongo_available(_patch_env):
+    """True if MongoDB is connected."""
+    import app as app_module
+    return app_module.MONGO_AVAILABLE
+
+
+def _skip_no_mongo(mongo_available):
+    if not mongo_available:
+        pytest.skip("MongoDB not available")

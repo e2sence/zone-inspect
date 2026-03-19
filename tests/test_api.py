@@ -114,7 +114,8 @@ class TestBruteForce:
         for i in range(5):
             resp = client.post("/login", json={"key": "wrong-key"})
             # First 4 should be 403; 5th triggers lockout and returns 429
-            assert resp.status_code in (403, 429), f"Attempt {i+1}: {resp.status_code}"
+            assert resp.status_code in (
+                403, 429), f"Attempt {i+1}: {resp.status_code}"
 
         # Next attempt while locked out
         resp = client.post("/login", json={"key": "wrong-key"})
