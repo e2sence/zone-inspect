@@ -58,6 +58,8 @@ except Exception as _e:
 try:
     from nn_engine import (match_score_nn, analyze_defects_nn,
                            locate_and_extract_nn, similarity_nn,
+                           similarity_nn_batch, similarity_nn_from_feats,
+                           extract_features, extract_features_batch,
                            align_photo_to_ref, NN_DEVICE)
     NN_AVAILABLE = True
 except ImportError:
@@ -721,7 +723,8 @@ def _locate_and_extract(zone_crop: np.ndarray, photo: np.ndarray,
 
 def _analyze_defects(zone_crop: np.ndarray, extracted: np.ndarray,
                      extract_nn_score: float = 0.0,
-                     strict: bool = False) -> dict:
+                     strict: bool = False,
+                     zone_feats=None, extracted_feats=None) -> dict:
     """
     Детекция дефектов: структурное сравнение при наличии neural engine,
     иначе classical (CLAHE + SSIM + edge diff).
@@ -729,7 +732,9 @@ def _analyze_defects(zone_crop: np.ndarray, extracted: np.ndarray,
     """
     if NN_AVAILABLE:
         return analyze_defects_nn(zone_crop, extracted, extract_nn_score,
-                                  strict=strict)
+                                  strict=strict,
+                                  zone_feats=zone_feats,
+                                  extracted_feats=extracted_feats)
 
     # ── OpenCV fallback ──────────────────────────────────────────────────
     size = (256, 256)
@@ -1123,11 +1128,21 @@ def _check_zone_impl(sid, photo_img=None):
     valid.sort(key=lambda c: c["ssim_quick"], reverse=True)
 
     TOP_N = min(3, len(valid))
-    for c in valid[:TOP_N]:
-        crop = _crop_zone(ref_img, zones[c["idx"]])
-        if NN_AVAILABLE:
-            c["score"] = similarity_nn(crop, c["extracted"])
-        else:
+    top_candidates = valid[:TOP_N]
+    if NN_AVAILABLE and top_candidates:
+        # Batch inference: one forward pass for all top pairs
+        pairs = []
+        for c in top_candidates:
+            crop = _crop_zone(ref_img, zones[c["idx"]])
+            c["_crop"] = crop
+            pairs.append((crop, c["extracted"]))
+        batch_scores = similarity_nn_batch(pairs)
+        for c, sc in zip(top_candidates, batch_scores):
+            c["score"] = sc
+    else:
+        for c in top_candidates:
+            crop = _crop_zone(ref_img, zones[c["idx"]])
+            c["_crop"] = crop
             c["score"] = c["ssim_quick"]
 
     for c in valid[TOP_N:]:
@@ -1163,34 +1178,65 @@ def _check_zone_impl(sid, photo_img=None):
     defect_info = None
     subzone_results = []
     if matched:
-        best_crop = _crop_zone(ref_img, zones[best["idx"]])
+        best_crop = best.get("_crop") if best.get(
+            "_crop") is not None else _crop_zone(ref_img, zones[best["idx"]])
         extracted = best["extracted"]
-        defect_info = _analyze_defects(best_crop, extracted, best_score)
 
-        # ── Подзоны: жёсткий анализ критических областей внутри зоны ──
+        # Pre-extract features for subzones in batch (saves 2 NN passes per subzone)
         subzones = zones[best["idx"]].get("subzones", [])
+        sz_pairs = []  # (idx, sz_ref, sz_ext)
         for szi, sz in enumerate(subzones):
             sz_ref = _crop_zone(best_crop, sz)
             sz_ext = _crop_zone(extracted, sz)
             if sz_ref.size == 0 or sz_ext.size == 0:
                 continue
-            # Приведём к одному размеру
             sh, sw = sz_ref.shape[:2]
             sz_ext = cv2.resize(sz_ext, (sw, sh))
-            sz_defect = _analyze_defects(sz_ref, sz_ext, best_score,
-                                         strict=True)
-            subzone_results.append({
-                "index": szi,
-                "label": sz.get("label", f"Подзона {szi + 1}"),
-                "status": sz_defect["status"],
-                "verdict": sz_defect["verdict"],
-                "defect_pct": sz_defect["defect_pct"],
-                "ssim": sz_defect["ssim"],
-                "vis_defects_b64": sz_defect["vis_defects_b64"],
-                "vis_heatmap_b64": sz_defect["vis_heatmap_b64"],
-                "extracted_b64": sz_defect["extracted_b64"],
-                "reference_b64": sz_defect["reference_b64"],
-            })
+            sz_pairs.append((szi, sz, sz_ref, sz_ext))
+
+        if NN_AVAILABLE and sz_pairs:
+            # Batch: extract features for all subzone refs + extracteds at once
+            all_imgs = []
+            for _, _, sz_ref, sz_ext in sz_pairs:
+                all_imgs.append(sz_ref)
+                all_imgs.append(sz_ext)
+            all_feats = extract_features_batch(all_imgs)
+            for pi, (szi, sz, sz_ref, sz_ext) in enumerate(sz_pairs):
+                zf = all_feats[pi * 2]
+                ef = all_feats[pi * 2 + 1]
+                sz_defect = _analyze_defects(
+                    sz_ref, sz_ext, best_score, strict=True,
+                    zone_feats=zf, extracted_feats=ef)
+                subzone_results.append({
+                    "index": szi,
+                    "label": sz.get("label", f"Подзона {szi + 1}"),
+                    "status": sz_defect["status"],
+                    "verdict": sz_defect["verdict"],
+                    "defect_pct": sz_defect["defect_pct"],
+                    "ssim": sz_defect["ssim"],
+                    "vis_defects_b64": sz_defect["vis_defects_b64"],
+                    "vis_heatmap_b64": sz_defect["vis_heatmap_b64"],
+                    "extracted_b64": sz_defect["extracted_b64"],
+                    "reference_b64": sz_defect["reference_b64"],
+                })
+        else:
+            for szi, sz, sz_ref, sz_ext in sz_pairs:
+                sz_defect = _analyze_defects(sz_ref, sz_ext, best_score,
+                                             strict=True)
+                subzone_results.append({
+                    "index": szi,
+                    "label": sz.get("label", f"Подзона {szi + 1}"),
+                    "status": sz_defect["status"],
+                    "verdict": sz_defect["verdict"],
+                    "defect_pct": sz_defect["defect_pct"],
+                    "ssim": sz_defect["ssim"],
+                    "vis_defects_b64": sz_defect["vis_defects_b64"],
+                    "vis_heatmap_b64": sz_defect["vis_heatmap_b64"],
+                    "extracted_b64": sz_defect["extracted_b64"],
+                    "reference_b64": sz_defect["reference_b64"],
+                })
+
+        defect_info = _analyze_defects(best_crop, extracted, best_score)
 
         # Итоговый статус зоны = худший из (зона, подзоны)
         if subzone_results:

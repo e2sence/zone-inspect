@@ -990,6 +990,15 @@
             flex-wrap: wrap;
         }
 
+        .action-btns-inline .btn:disabled {
+            opacity: .55;
+            cursor: wait;
+        }
+
+        .btn:active:not(:disabled) {
+            transform: scale(.95);
+        }
+
         /* ── Templates ── */
         .tpl-grid {
             display: grid;

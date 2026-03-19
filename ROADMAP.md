@@ -112,6 +112,34 @@ Everything saved into the template as a `calibration` object:
 
 ---
 
+## 4. Backbone upgrade: EfficientNetV2-S
+
+Replace EfficientNet-B4 with EfficientNetV2-S as the feature extraction backbone.
+
+**Why:**
+- Same EfficientNet family -- near drop-in replacement, minimal integration risk
+- Fused-MBConv blocks replace depthwise separable convolutions in early layers -- faster on CPU/GPU/MPS
+- Expected **30-40% speedup** on forward pass with comparable or better feature quality
+- Pretrained weights available in torchvision (`efficientnet_v2_s`)
+- Feature map structure (`.features` sequential blocks) is identical -- same multi-scale extraction approach
+
+**Why not other models:**
+- **MobileNetV4** -- optimized for classification on mobile, spatial feature maps too shallow for patch-level PCB comparison
+- **DINOv2 (ViT-S)** -- best similarity features, but Vision Transformer is slower on CPU/MPS and requires architectural rework
+- **ConvNeXt-Tiny** -- good features but 29M params (heavier) with marginal benefit over V2-S
+
+**What changes:**
+- `_MultiScaleExtractor.__init__`: swap `efficientnet_b4` -> `efficientnet_v2_s`
+- Adjust `LAYERS` indices (V2-S block structure differs slightly)
+- `INPUT_SIZE` may change from 380x380 to 384x384 (V2-S native)
+- Validate: run existing test suite, compare scores on saved references
+
+**Risk:** Low. Same family, same extraction approach. If scores drift -- retune thresholds in `inspection_config.py`.
+
+**Effort:** ~1-2 hours code, + testing on real boards
+
+---
+
 ## Implementation order
 
 | # | Feature             | Depends on | Priority |
@@ -122,3 +150,4 @@ Everything saved into the template as a `calibration` object:
 | 4 | Calibration Phase 2 | 3          | Low      |
 | 5 | Calibration Report  | 3          | Medium   |
 | 6 | Auto-sensitivity    | 3          | Low      |
+| 7 | Backbone V2-S       | --         | Low      |

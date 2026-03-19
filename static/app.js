@@ -1732,6 +1732,7 @@
 
         // Close & Save — save whatever we have now, return to SN
         document.getElementById('btn-close-save').addEventListener('click', async () => {
+            const btn = document.getElementById('btn-close-save');
             if (!sessionId) return;
             console.log('[CLOSE-SAVE] checkedZones=', [...checkedZones], 'lastResultId=', lastResultId, 'resultSaved=', resultSaved);
             console.log('[CLOSE-SAVE] userDecisions=', JSON.stringify(userDecisions), 'userSubDecisions=', JSON.stringify(userSubDecisions));
@@ -1739,6 +1740,9 @@
                 toast('No zones checked — nothing to save', 'warn');
                 return;
             }
+            btn.disabled = true;
+            const origText = btn.textContent;
+            btn.textContent = 'Saving...';
             // If already saved, update existing record; otherwise create new
             if (lastResultId) {
                 // update_result doesn't depend on session state, safe to fire-and-forget
@@ -1776,18 +1780,28 @@
                 } catch(e) { toast('Save failed: ' + e.message, 'error'); }
                 startNewBoard();
             }
+            btn.disabled = false;
+            btn.textContent = origText;
         });
 
         // Skip Board — save result as-is, move to new board
         document.getElementById('btn-skip-board').addEventListener('click', async () => {
+            const btn = document.getElementById('btn-skip-board');
             if (!sessionId) return;
+            btn.disabled = true;
+            btn.textContent = 'Skipping...';
             toast('Board skipped — starting new board', 'info');
             await startNewBoard();
+            btn.disabled = false;
+            btn.textContent = 'Skip Board';
         });
 
         // Retry Failed Zones — reset only non-OK zones
         document.getElementById('btn-retry-board').addEventListener('click', async () => {
+            const btn = document.getElementById('btn-retry-board');
             if (!sessionId) return;
+            btn.disabled = true;
+            btn.textContent = 'Retrying...';
             // Clear only non-OK zones from checked
             const toRetry = [];
             zones.forEach((_, i) => {
@@ -1810,6 +1824,8 @@
             renderStep3();
             drawMiniRef();
             toast(`Retrying ${toRetry.length} zone(s)`, 'info');
+            btn.disabled = false;
+            btn.textContent = 'Retry Failed Zones';
         });
 
         /* ═══════════════════════════════════════════════════════════════════════════ */

@@ -135,6 +135,47 @@ def _b64(img):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @torch.no_grad()
+def extract_features(img: np.ndarray, preprocess=None):
+    """
+    Extract NN features for an image (for caching).
+    preprocess: optional callable(img) -> BGR ndarray, applied before _to_tensor.
+    Returns: (glob, feats) tuple — tensors on DEVICE.
+    Caller should .clone() if storing long-term.
+    """
+    m = _model()
+    if preprocess is not None:
+        img = preprocess(img)
+    t = _to_tensor(img)
+    glob, feats = m(t)
+    return glob, feats
+
+
+@torch.no_grad()
+def extract_features_batch(images: list[np.ndarray], preprocess=None):
+    """
+    Batch feature extraction for multiple images.
+    Returns: list of (glob, feats) tuples, one per image.
+    """
+    if not images:
+        return []
+    m = _model()
+    tensors = []
+    for img in images:
+        if preprocess is not None:
+            img = preprocess(img)
+        tensors.append(_to_tensor(img))
+    batch = torch.cat(tensors, dim=0)
+    globs, feats_dict = m(batch)
+    # Split back into individual results
+    results = []
+    for i in range(len(images)):
+        g = globs[i:i+1]
+        f = {k: v[i:i+1] for k, v in feats_dict.items()}
+        results.append((g, f))
+    return results
+
+
+@torch.no_grad()
 def match_score_nn(zone_crop: np.ndarray, photo: np.ndarray) -> float:
     """
     Нейросетевой скор сопоставления зоны с фото.
@@ -162,7 +203,17 @@ def similarity_nn(img_a: np.ndarray, img_b: np.ndarray) -> float:
     b_t = _to_tensor(img_b)
     _, a_feats = m(a_t)
     _, b_feats = m(b_t)
+    return _similarity_from_feats(a_feats, b_feats)
 
+
+@torch.no_grad()
+def similarity_nn_from_feats(a_feats, b_feats) -> float:
+    """Same as similarity_nn but using pre-extracted features."""
+    return _similarity_from_feats(a_feats, b_feats)
+
+
+def _similarity_from_feats(a_feats, b_feats) -> float:
+    """Compute similarity score from feature dicts."""
     # Global similarity по слою 7
     a_pool = F.adaptive_avg_pool2d(a_feats[7], 1).flatten()
     b_pool = F.adaptive_avg_pool2d(b_feats[7], 1).flatten()
@@ -177,6 +228,34 @@ def similarity_nn(img_a: np.ndarray, img_b: np.ndarray) -> float:
     # Комбинация: 50% global + 50% patch
     score = 0.5 * max(g_sim, 0) + 0.5 * max(patch_sim, 0)
     return round(min(max(score, 0.0), 1.0), 4)
+
+
+@torch.no_grad()
+def similarity_nn_batch(pairs: list[tuple[np.ndarray, np.ndarray]]) -> list[float]:
+    """
+    Batch similarity scoring for multiple (img_a, img_b) pairs.
+    Single forward pass for all images, then pairwise similarity.
+    Returns: list of scores, one per pair.
+    """
+    if not pairs:
+        return []
+    m = _model()
+    # Build one batch: [a0, b0, a1, b1, ...]
+    tensors = []
+    for img_a, img_b in pairs:
+        tensors.append(_to_tensor(img_a))
+        tensors.append(_to_tensor(img_b))
+    batch = torch.cat(tensors, dim=0)
+    _, all_feats = m(batch)
+
+    scores = []
+    for i in range(len(pairs)):
+        a_idx = i * 2
+        b_idx = i * 2 + 1
+        a_f = {k: v[a_idx:a_idx+1] for k, v in all_feats.items()}
+        b_f = {k: v[b_idx:b_idx+1] for k, v in all_feats.items()}
+        scores.append(_similarity_from_feats(a_f, b_f))
+    return scores
 
 
 def align_photo_to_ref(ref_img: np.ndarray, photo: np.ndarray):
@@ -430,7 +509,8 @@ def _try_template_match(zone_crop, photo):
 @torch.no_grad()
 def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
                        extract_nn_score: float = 0.0,
-                       strict: bool = False) -> dict:
+                       strict: bool = False,
+                       zone_feats=None, extracted_feats=None) -> dict:
     """
     Детекция дефектов через patch-based CNN comparison.
 
@@ -439,6 +519,9 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
       2. Глобальное сходство (pooled features) + SSIM
       3. Патчи с низким сходством = потенциальные дефекты
       4. defect_pct = взвешенная комбинация patch defects, global_sim, SSIM
+
+    zone_feats / extracted_feats: pre-computed (glob, feats) from extract_features().
+      If provided, skips the corresponding forward pass (saves ~50-150ms each).
 
     strict=True: подзоны — жёсткие пороги из SUBZONE_* в inspection_config.py.
     """
@@ -464,10 +547,18 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
 
     z_blur = cv2.GaussianBlur(z_norm, cfg.PRE_BLUR_KERNEL, 0)
     e_blur = cv2.GaussianBlur(e_norm, cfg.PRE_BLUR_KERNEL, 0)
-    z_t = _to_tensor(z_blur)
-    e_t = _to_tensor(e_blur)
-    _, z_feats = m(z_t)
-    _, e_feats = m(e_t)
+
+    # Use cached features or compute fresh
+    if zone_feats is not None:
+        _, z_feats = zone_feats
+    else:
+        z_t = _to_tensor(z_blur)
+        _, z_feats = m(z_t)
+    if extracted_feats is not None:
+        _, e_feats = extracted_feats
+    else:
+        e_t = _to_tensor(e_blur)
+        _, e_feats = m(e_t)
 
     # ─── 1. Глобальное сходство ───────────────────────────────────────────
     z_pool = F.adaptive_avg_pool2d(z_feats[7], 1).flatten()
@@ -503,14 +594,10 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
     # Laplacian variance per patch block
     lap = cv2.Laplacian(ref_gray, cv2.CV_64F)
     lap_abs = np.abs(lap)
-    # Средний градиент на каждый патч
-    texture_map = np.zeros((patch_h, patch_w), dtype=np.float32)
+    # Средний градиент на каждый патч — vectorized reshape+mean
     block_h, block_w = 16, 16
-    for py in range(patch_h):
-        for px in range(patch_w):
-            block = lap_abs[py*block_h:(py+1)*block_h,
-                            px*block_w:(px+1)*block_w]
-            texture_map[py, px] = block.mean()
+    texture_map = lap_abs.reshape(patch_h, block_h, patch_w, block_w).mean(
+        axis=(1, 3)).astype(np.float32)
 
     # Нормализуем: 0 = однотонный, 1 = текстурный
     tex_max = texture_map.max()
@@ -591,16 +678,6 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
             defect_pct = round(raw_defect, 2)
 
     defect_pct = min(defect_pct, 100.0)
-
-    # DEBUG: log defect calculation details
-    import logging as _log_nn
-    _log_nn.warning(
-        "DEFECT_DEBUG strict=%s raw_defect=%.2f best_global=%.3f "
-        "global_sim=%.3f ssim=%.3f defect_pct=%.2f "
-        "ok_thr=%.1f warn_thr=%.1f patch_sim_thr=%.3f",
-        strict, raw_defect, best_global, global_sim, ssim_val,
-        defect_pct, ok_thr, warn_thr, patch_sim_thr
-    )
 
     # ─── 5. Визуализация ──────────────────────────────────────────────────
     vis_size = (256, 256)
