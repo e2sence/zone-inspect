@@ -864,7 +864,7 @@ def api_auto_blend():
     """Принять несколько изображений, автоматически выровнять и усреднить."""
     files = request.files.getlist("images")
     if len(files) < 2:
-        return jsonify({"error": "Нужно минимум 2 изображения"}), 400
+        return jsonify({"error": "At least 2 images required"}), 400
 
     images = []
     for f in files:
@@ -876,11 +876,11 @@ def api_auto_blend():
             images.append(img)
 
     if len(images) < 2:
-        return jsonify({"error": "Не удалось прочитать изображения (нужно минимум 2)"}), 400
+        return jsonify({"error": "Failed to read images (at least 2 required)"}), 400
 
     result, logs = auto_blend_images(images)
     if result is None:
-        return jsonify({"error": "Не удалось выровнять изображения", "log": logs}), 422
+        return jsonify({"error": "Failed to align images", "log": logs}), 422
 
     return jsonify({
         "image_b64": _img_to_b64(result),
@@ -899,12 +899,12 @@ def create_session():
         files = request.files.getlist("images")
         file = files[0] if files else None
     if not file or not _allowed(file.filename):
-        return jsonify({"error": "Файл не найден или недопустимый формат"}), 400
+        return jsonify({"error": "File not found or unsupported format"}), 400
 
     img_path = _save_upload(file)
     ref_img = cv2.imread(str(img_path))
     if ref_img is None:
-        return jsonify({"error": "Не удалось открыть изображение"}), 400
+        return jsonify({"error": "Failed to open image"}), 400
 
     sid = uuid.uuid4().hex[:12]
     sessions[sid] = {
@@ -930,22 +930,22 @@ def create_session():
 def set_zones(sid):
     """Шаг 2: Задать зоны контроля. Body: { zones: [{x,y,w,h,label},...] } — нормализованные 0..1."""
     if sid not in sessions:
-        return jsonify({"error": "Сессия не найдена"}), 404
+        return jsonify({"error": "Session not found"}), 404
 
     data = request.get_json(silent=True)
     if not data or "zones" not in data:
-        return jsonify({"error": "Нужен JSON с полем 'zones'"}), 400
+        return jsonify({"error": "JSON with 'zones' field required"}), 400
 
     zones = data["zones"]
     if not isinstance(zones, list) or len(zones) == 0:
-        return jsonify({"error": "Список зон пуст"}), 400
+        return jsonify({"error": "Zone list is empty"}), 400
 
     for i, z in enumerate(zones):
         for key in ("x", "y", "w", "h"):
             if key not in z:
-                return jsonify({"error": f"Зона {i}: отсутствует '{key}'"}), 400
+                return jsonify({"error": f"Zone {i}: missing '{key}'"}), 400
         if "label" not in z:
-            z["label"] = f"Зона {i + 1}"
+            z["label"] = f"Zone {i + 1}"
         # Validate subzones (coords relative to parent zone 0..1)
         subzones = z.get("subzones", [])
         if not isinstance(subzones, list):
@@ -953,9 +953,9 @@ def set_zones(sid):
         for j, sz in enumerate(subzones):
             for key in ("x", "y", "w", "h"):
                 if key not in sz:
-                    return jsonify({"error": f"Зона {i}, подзона {j}: отсутствует '{key}'"}), 400
+                    return jsonify({"error": f"Zone {i}, subzone {j}: missing '{key}'"}), 400
             if "label" not in sz:
-                sz["label"] = f"Подзона {j + 1}"
+                sz["label"] = f"Subzone {j + 1}"
         z["subzones"] = subzones
 
     sessions[sid]["zones"] = zones
@@ -977,24 +977,24 @@ def set_zones(sid):
 def set_serial(sid):
     """Загрузить фото серийного номера — распознать штрих-код/QR."""
     if sid not in sessions:
-        return jsonify({"error": "Сессия не найдена"}), 404
+        return jsonify({"error": "Session not found"}), 404
 
     file = request.files.get("photo")
     if not file or not _allowed(file.filename):
-        return jsonify({"error": "Файл не найден"}), 400
+        return jsonify({"error": "File not found"}), 400
 
     data = np.frombuffer(file.read(), np.uint8)
     img = cv2.imdecode(data, cv2.IMREAD_COLOR)
     if img is None:
-        return jsonify({"error": "Не удалось прочитать изображение"}), 400
+        return jsonify({"error": "Failed to read image"}), 400
 
     codes = detect_codes(img)
     if not codes:
-        return jsonify({"error": "Код не найден. Попробуйте сфотографировать ближе или чётче."}), 422
+        return jsonify({"error": "Code not found. Try photographing closer or sharper."}), 422
 
     # Pick the first code with non-empty data, fallback to first
     best = next((c for c in codes if c["data"]), codes[0])
-    serial = best["data"] or "не распознано"
+    serial = best["data"] or "unrecognized"
     sessions[sid]["serial"] = serial
     sessions[sid]["serial_type"] = best["type"]
 
@@ -1013,17 +1013,17 @@ def check_zone(sid):
         return _check_zone_impl(sid)
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": f"Внутренняя ошибка: {e}"}), 500
+        return jsonify({"error": f"Internal error: {e}"}), 500
 
 
 def _check_zone_impl(sid, photo_img=None):
     if sid not in sessions:
-        return jsonify({"error": "Сессия не найдена"}), 404
+        return jsonify({"error": "Session not found"}), 404
 
     s = sessions[sid]
     s["_last_active"] = time.time()
     if not s["zones"]:
-        return jsonify({"error": "Зоны не заданы"}), 400
+        return jsonify({"error": "Zones not defined"}), 400
 
     # ─── Sensitivity overrides from frontend ──────────────────────────────
     import inspection_config as _cfg
@@ -1055,16 +1055,16 @@ def _check_zone_impl(sid, photo_img=None):
         photo = photo_img
     else:
         if "photo" not in request.files:
-            return jsonify({"error": "Файл 'photo' не найден"}), 400
+            return jsonify({"error": "File 'photo' not found"}), 400
 
         file = request.files["photo"]
         if not file or not _allowed(file.filename):
-            return jsonify({"error": "Недопустимый формат файла"}), 400
+            return jsonify({"error": "Unsupported file format"}), 400
 
         photo_path = _save_upload(file)
         photo = cv2.imread(str(photo_path))
         if photo is None:
-            return jsonify({"error": "Не удалось открыть фото"}), 400
+            return jsonify({"error": "Failed to open photo"}), 400
 
     ref_img = s["ref_img"]
     zones = s["zones"]
@@ -1209,7 +1209,7 @@ def _check_zone_impl(sid, photo_img=None):
                     zone_feats=zf, extracted_feats=ef)
                 subzone_results.append({
                     "index": szi,
-                    "label": sz.get("label", f"Подзона {szi + 1}"),
+                    "label": sz.get("label", f"Subzone {szi + 1}"),
                     "status": sz_defect["status"],
                     "verdict": sz_defect["verdict"],
                     "defect_pct": sz_defect["defect_pct"],
@@ -1225,7 +1225,7 @@ def _check_zone_impl(sid, photo_img=None):
                                              strict=True)
                 subzone_results.append({
                     "index": szi,
-                    "label": sz.get("label", f"Подзона {szi + 1}"),
+                    "label": sz.get("label", f"Subzone {szi + 1}"),
                     "status": sz_defect["status"],
                     "verdict": sz_defect["verdict"],
                     "defect_pct": sz_defect["defect_pct"],
@@ -1251,7 +1251,7 @@ def _check_zone_impl(sid, photo_img=None):
                               if sr["status"] == worst)
                 defect_info["verdict"] = (
                     f"{bad_sz['verdict']} "
-                    f"(подзона: {bad_sz['label']})")
+                    f"(subzone: {bad_sz['label']})")
 
         from datetime import datetime as _dt, timezone as _tz, timedelta as _td
         _tz8 = _tz(_td(hours=8))
@@ -1307,7 +1307,7 @@ def _check_zone_impl(sid, photo_img=None):
 def session_status(sid):
     """Текущий прогресс сессии."""
     if sid not in sessions:
-        return jsonify({"error": "Сессия не найдена"}), 404
+        return jsonify({"error": "Session not found"}), 404
     s = sessions[sid]
     return jsonify({
         "zones": [z["label"] for z in s["zones"]],
@@ -1324,7 +1324,7 @@ def session_status(sid):
 def set_auto_accept(sid):
     """Store auto-accept flag so mobile companion knows whether to auto-advance."""
     if sid not in sessions:
-        return jsonify({"error": "Сессия не найдена"}), 404
+        return jsonify({"error": "Session not found"}), 404
     data = request.get_json(silent=True) or {}
     sessions[sid]["_auto_accept"] = bool(data.get("auto_accept", True))
     return jsonify({"status": "ok"})
@@ -1334,7 +1334,7 @@ def set_auto_accept(sid):
 def reset_session(sid):
     """Сбросить проверку (зоны остаются)."""
     if sid not in sessions:
-        return jsonify({"error": "Сессия не найдена"}), 404
+        return jsonify({"error": "Session not found"}), 404
     sessions[sid]["checked"] = {}
     sessions[sid].pop("serial", None)
     sessions[sid].pop("serial_type", None)
@@ -1347,7 +1347,7 @@ def reset_session(sid):
 def session_retry_failed(sid):
     """Clear only non-OK zones so they can be rescanned (no board_seq bump)."""
     if sid not in sessions:
-        return jsonify({"error": "Сессия не найдена"}), 404
+        return jsonify({"error": "Session not found"}), 404
     checked = sessions[sid].get("checked", {})
     cleared = []
     for key in list(checked.keys()):
@@ -1850,14 +1850,14 @@ def save_template():
         return jsonify({"error": "MongoDB unavailable"}), 503
     data = request.get_json(silent=True)
     if not data or "session_id" not in data or "name" not in data:
-        return jsonify({"error": "Нужны session_id и name"}), 400
+        return jsonify({"error": "session_id and name required"}), 400
 
     sid = data["session_id"]
     name = data["name"].strip()
     if not name:
-        return jsonify({"error": "Имя шаблона не может быть пустым"}), 400
+        return jsonify({"error": "Template name cannot be empty"}), 400
     if sid not in sessions:
-        return jsonify({"error": "Сессия не найдена"}), 404
+        return jsonify({"error": "Session not found"}), 404
 
     s = sessions[sid]
 
@@ -1865,7 +1865,7 @@ def save_template():
         s["zones"] = data["zones"]
 
     if not s["zones"]:
-        return jsonify({"error": "Зоны не заданы"}), 400
+        return jsonify({"error": "Zones not defined"}), 400
 
     import datetime
     tid = uuid.uuid4().hex[:10]
@@ -1902,16 +1902,16 @@ def load_template(tid):
     q.update(_group_filter())
     meta = _templates_col.find_one(q, {"_id": 0})
     if not meta:
-        return jsonify({"error": "Шаблон не найден"}), 404
+        return jsonify({"error": "Template not found"}), 404
 
     ref_bytes = r2.download_bytes(f"templates/{tid}/{meta['ref_image']}")
     if not ref_bytes:
-        return jsonify({"error": "Не удалось открыть референс шаблона"}), 500
+        return jsonify({"error": "Failed to open template reference"}), 500
 
     ref_img = cv2.imdecode(np.frombuffer(
         ref_bytes, np.uint8), cv2.IMREAD_COLOR)
     if ref_img is None:
-        return jsonify({"error": "Не удалось декодировать референс"}), 500
+        return jsonify({"error": "Failed to decode reference"}), 500
 
     zones = meta["zones"]
     if meta.get("anchors") and not any(z.get("anchors") for z in zones):
@@ -1968,7 +1968,7 @@ def delete_template(tid):
     q.update(_group_filter())
     res = _templates_col.delete_one(q)
     if res.deleted_count == 0:
-        return jsonify({"error": "Шаблон не найден"}), 404
+        return jsonify({"error": "Template not found"}), 404
     # Also delete images from R2
     r2.delete_prefix(_r2_tpl_prefix(tid))
     return jsonify({"status": "ok"})
@@ -1987,7 +1987,7 @@ def update_template(tid):
     q.update(_group_filter())
     old_meta = _templates_col.find_one(q, {"_id": 0})
     if not old_meta:
-        return jsonify({"error": "Шаблон не найден"}), 404
+        return jsonify({"error": "Template not found"}), 404
 
     data = request.get_json(silent=True) or {}
     old_version = old_meta.get("version", 1)
@@ -2040,7 +2040,7 @@ def list_template_versions(tid):
                                                 "created": 1, "updated": 1, "versions": 1,
                                                 "group": 1})
     if not doc:
-        return jsonify({"error": "Шаблон не найден"}), 404
+        return jsonify({"error": "Template not found"}), 404
 
     versions = [{"version": doc.get("version", 1),
                  "created": doc.get("updated", doc.get("created", "")),
@@ -2061,17 +2061,17 @@ def template_detail(tid):
     q.update(_group_filter())
     meta = _templates_col.find_one(q, {"_id": 0})
     if not meta:
-        return jsonify({"error": "Шаблон не найден"}), 404
+        return jsonify({"error": "Template not found"}), 404
 
     prefix = _r2_tpl_prefix(tid)
     ref_bytes = r2.download_bytes(prefix + meta["ref_image"])
     if not ref_bytes:
-        return jsonify({"error": "Не удалось открыть референс"}), 500
+        return jsonify({"error": "Failed to open reference"}), 500
 
     ref_img = cv2.imdecode(np.frombuffer(
         ref_bytes, np.uint8), cv2.IMREAD_COLOR)
     if ref_img is None:
-        return jsonify({"error": "Не удалось декодировать референс"}), 500
+        return jsonify({"error": "Failed to decode reference"}), 500
 
     h, w = ref_img.shape[:2]
     zone_previews = []
@@ -2120,7 +2120,7 @@ def restore_template_version(tid, ver):
     q.update(_group_filter())
     doc = _templates_col.find_one(q, {"_id": 0})
     if not doc:
-        return jsonify({"error": "Шаблон не найден"}), 404
+        return jsonify({"error": "Template not found"}), 404
 
     # Find target version in embedded versions array
     target = None
@@ -2129,7 +2129,7 @@ def restore_template_version(tid, ver):
             target = v
             break
     if not target:
-        return jsonify({"error": f"Версия v{ver} не найдена"}), 404
+        return jsonify({"error": f"Version v{ver} not found"}), 404
 
     old_version = doc.get("version", 1)
     new_version = old_version + 1
@@ -2206,7 +2206,7 @@ def migrate_templates_to_mongo():
 def generate_mobile_qr(sid):
     """Сгенерировать QR-код для мобильной камеры."""
     if sid not in sessions:
-        return jsonify({"error": "Сессия не найдена"}), 404
+        return jsonify({"error": "Session not found"}), 404
 
     # Generate a fresh token for each new session so the displayed URL changes,
     # but keep old tokens alive (remapped) so mobile phones don't need to re-scan.
@@ -2275,7 +2275,7 @@ def mobile_info(token):
     """Get session info for a mobile token."""
     sid = _get_token_session(token)
     if not sid or sid not in sessions:
-        return jsonify({"error": "Недействительная ссылка"}), 404
+        return jsonify({"error": "Invalid link"}), 404
 
     sess = sessions[sid]
     zones = sess.get("zones", [])
@@ -2389,23 +2389,23 @@ def mobile_serial(token):
     """Upload serial number photo from mobile."""
     sid = _get_token_session(token)
     if not sid or sid not in sessions:
-        return jsonify({"error": "Недействительная ссылка"}), 404
+        return jsonify({"error": "Invalid link"}), 404
 
     file = request.files.get("photo")
     if not file:
-        return jsonify({"error": "Фото не найдено"}), 400
+        return jsonify({"error": "Photo not found"}), 400
 
     data = np.frombuffer(file.read(), np.uint8)
     img = cv2.imdecode(data, cv2.IMREAD_COLOR)
     if img is None:
-        return jsonify({"error": "Не удалось прочитать изображение"}), 400
+        return jsonify({"error": "Failed to read image"}), 400
 
     codes = detect_codes(img, quick=False)
     if not codes:
         return jsonify({"error": "Code not found. Try closer or sharper."}), 422
 
     best = next((c for c in codes if c["data"]), codes[0])
-    serial = best["data"] or "не распознано"
+    serial = best["data"] or "unrecognized"
     sessions[sid]["serial"] = serial
     sessions[sid]["serial_type"] = best["type"]
 
@@ -2417,7 +2417,7 @@ def mobile_retry_failed(token):
     """Clear non-OK zones from checked so they can be rescanned."""
     sid = _get_token_session(token)
     if not sid or sid not in sessions:
-        return jsonify({"error": "Недействительная ссылка"}), 404
+        return jsonify({"error": "Invalid link"}), 404
 
     sess = sessions[sid]
     checked = sess.get("checked", {})
@@ -2461,11 +2461,11 @@ def mobile_zone_photo(token):
     """Upload a zone photo from mobile → stored for desktop to pick up."""
     sid = _get_token_session(token)
     if not sid or sid not in sessions:
-        return jsonify({"error": "Недействительная ссылка"}), 404
+        return jsonify({"error": "Invalid link"}), 404
 
     file = request.files.get("photo")
     if not file:
-        return jsonify({"error": "Фото не найдено"}), 400
+        return jsonify({"error": "Photo not found"}), 400
 
     photo_bytes = file.read()
     if sid not in mobile_photos:
@@ -2479,7 +2479,7 @@ def mobile_zone_photo(token):
 def get_mobile_photos(sid):
     """Desktop polls this to check for new photos from mobile."""
     if sid not in sessions:
-        return jsonify({"error": "Сессия не найдена"}), 404
+        return jsonify({"error": "Session not found"}), 404
 
     photos = mobile_photos.get(sid, [])
     serial = sessions[sid].get("serial", "")
@@ -2496,16 +2496,16 @@ def get_mobile_photos(sid):
 def pop_mobile_photo(sid):
     """Desktop fetches the next mobile photo (FIFO) and processes it as a zone check."""
     if sid not in sessions:
-        return jsonify({"error": "Сессия не найдена"}), 404
+        return jsonify({"error": "Session not found"}), 404
 
     photos = mobile_photos.get(sid, [])
     if not photos:
-        return jsonify({"error": "Нет фото в очереди"}), 404
+        return jsonify({"error": "No photos in queue"}), 404
 
     photo_bytes = photos.pop(0)
     img = cv2.imdecode(np.frombuffer(photo_bytes, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
-        return jsonify({"error": "Не удалось прочитать изображение"}), 400
+        return jsonify({"error": "Failed to read image"}), 400
 
     # Downscale large mobile photos to match reference size (speed up SIFT)
     ref_img = sessions[sid]["ref_img"]
