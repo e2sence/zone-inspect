@@ -4,6 +4,8 @@ import io
 
 import pytest
 
+pytestmark = pytest.mark.auth
+
 
 class TestOperatorRestrictions:
     """Operators cannot save/delete/update templates (lead/admin only)."""

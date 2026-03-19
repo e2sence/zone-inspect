@@ -3,6 +3,9 @@
 import base64
 
 import cv2
+import pytest
+
+pytestmark = pytest.mark.unit
 import numpy as np
 
 

@@ -3,6 +3,9 @@
 import io
 
 import cv2
+import pytest
+
+pytestmark = pytest.mark.edge
 import numpy as np
 import pytest
 

@@ -4,6 +4,8 @@ import io
 
 import pytest
 
+pytestmark = pytest.mark.api
+
 
 class TestCheckZone:
     """POST /api/session/<sid>/check — submit a zone photo."""

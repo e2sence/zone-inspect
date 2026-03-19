@@ -4,6 +4,8 @@ import io
 
 import pytest
 
+pytestmark = pytest.mark.mobile
+
 
 class TestMobileQR:
     def test_generate_qr(self, authed_client, session_with_zones):

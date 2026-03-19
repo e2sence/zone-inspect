@@ -2,6 +2,8 @@
 
 import pytest
 
+pytestmark = [pytest.mark.api_v1, pytest.mark.mongo]
+
 
 class TestApiV1Results:
     """GET /api/v1/results — list inspection results."""

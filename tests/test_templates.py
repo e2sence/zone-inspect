@@ -4,6 +4,8 @@ import io
 
 import pytest
 
+pytestmark = [pytest.mark.templates, pytest.mark.mongo]
+
 
 @pytest.fixture(autouse=True)
 def _require_mongo(mongo_available):
