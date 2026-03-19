@@ -192,7 +192,7 @@ AUTH_COOKIE_MAX_AGE = 30 * 86400  # 30 days
 
 
 def _load_auth_keys() -> dict:
-    """Load {key: username} from auth_keys.json."""
+    """Load auth_keys.json (users + api_keys)."""
     if AUTH_KEYS_PATH.exists():
         with open(AUTH_KEYS_PATH) as f:
             return json.load(f)
@@ -200,16 +200,71 @@ def _load_auth_keys() -> dict:
 
 
 def _check_auth():
-    """Return username if valid auth, else None."""
+    """Return username if valid auth, else None.
+    Sets request.auth_scope = 'full' | 'read'.
+    Sets request.auth_role  = 'admin' | 'lead' | 'operator' | 'api'.
+    Sets request.auth_group = group string | None (admin).
+    """
     key = request.cookies.get(AUTH_COOKIE) or request.headers.get("X-Auth-Key")
     if not key:
         return None
-    keys = _load_auth_keys()
-    return keys.get(key)
+    data = _load_auth_keys()
+    # Regular user key
+    entry = data.get("users", {}).get(key)
+    if entry:
+        request.auth_scope = "full"
+        request.auth_role = entry.get("role", "operator")
+        request.auth_group = entry.get("group")  # None for admin
+        return entry["name"]
+    # API key (apk_ prefix)
+    api_entry = data.get("api_keys", {}).get(key)
+    if api_entry:
+        request.auth_scope = api_entry.get("scope", "read")
+        request.auth_role = "api"
+        request.auth_group = api_entry.get("group")  # None = all groups
+        return f"api:{api_entry['name']}"
+    return None
 
 
 # Routes that don't require auth
-_PUBLIC_PREFIXES = ("/login", "/static/", "/api/mobile/", "/mobile")
+_PUBLIC_PREFIXES = ("/login", "/static/", "/api/mobile/", "/mobile", "/doc")
+
+
+def _require_read_scope():
+    """Return 403 JSON if current auth lacks read scope."""
+    scope = getattr(request, "auth_scope", "full")
+    if scope not in ("read", "full"):
+        return jsonify({"error": "Forbidden: insufficient scope"}), 403
+    return None
+
+
+def _require_full_scope():
+    """Return 403 JSON if current auth is read-only (API key)."""
+    scope = getattr(request, "auth_scope", "full")
+    if scope != "full":
+        return jsonify({"error": "Forbidden: read-only API key"}), 403
+    return None
+
+
+def _require_lead_or_admin():
+    """Return 403 JSON if current user is not admin or lead."""
+    role = getattr(request, "auth_role", "")
+    if role not in ("admin", "lead"):
+        return jsonify({"error": "Forbidden: requires admin or lead role"}), 403
+    return None
+
+
+def _group_filter(field: str = "group", shared: bool = False) -> dict:
+    """Return MongoDB filter dict restricting by group.
+    Admin/API see everything; operators see own group.
+    shared=True also includes records with empty/missing group (shared).
+    """
+    grp = getattr(request, "auth_group", None)
+    if grp is None:
+        return {}
+    if shared:
+        return {"$or": [{field: grp}, {field: {"$exists": False}}, {field: ""}]}
+    return {field: grp}
 
 
 @app.before_request
@@ -228,6 +283,12 @@ def _require_auth():
         return redirect("/login")
     # Tag request with user
     request.auth_user = user
+    # Read-only API keys can only access /api/v1/ GET routes
+    scope = getattr(request, "auth_scope", "full")
+    if scope == "read":
+        if path.startswith("/api/v1/") and request.method == "GET":
+            return None
+        return jsonify({"error": "Forbidden: read-only API key"}), 403
 
 
 @app.after_request
@@ -249,10 +310,10 @@ def login_submit():
     data = request.get_json(silent=True) or {}
     key = data.get("key", "").strip()
     keys = _load_auth_keys()
-    username = keys.get(key)
-    if not username:
+    entry = keys.get("users", {}).get(key)
+    if not entry:
         return jsonify({"error": "Invalid access key"}), 403
-    resp = jsonify({"status": "ok", "user": username})
+    resp = jsonify({"status": "ok", "user": entry["name"]})
     resp.set_cookie(AUTH_COOKIE, key, max_age=AUTH_COOKIE_MAX_AGE,
                     httponly=True, samesite="Lax")
     return resp
@@ -265,9 +326,9 @@ def logout():
     return resp
 
 
-@app.route("/help")
-def help_page():
-    return render_template("help.html")
+@app.route("/doc")
+def doc_page():
+    return render_template("doc.html")
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -702,7 +763,10 @@ def _analyze_defects(zone_crop: np.ndarray, extracted: np.ndarray,
 # ─── Routes ───────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html",
+                           auth_user=getattr(request, "auth_user", ""),
+                           auth_role=getattr(request, "auth_role", ""),
+                           auth_group=getattr(request, "auth_group", "") or "")
 
 
 @app.route("/api/auto_blend", methods=["POST"])
@@ -1193,6 +1257,7 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
         "serial": s.get("serial", ""),
         "serial_type": s.get("serial_type", ""),
         "operator": s.get("operator", ""),
+        "group": getattr(request, "auth_group", "") or "",
         "zones_total": len(s["zones"]),
         "zones_checked": len(s["checked"]),
         "zones": [],
@@ -1418,6 +1483,126 @@ def update_result(sid):
     return jsonify({"status": "ok", "overall": overall, "result_id": rid})
 
 
+# ─── External API v1 (read-only, for integrations) ───────────────────────────
+
+@app.route("/api/v1/results")
+def api_v1_list_results():
+    """External API: list inspection results with date/serial/template filters.
+    Auth: X-Auth-Key header with an apk_ key (read scope).
+    Query params: from, to (ISO dates), serial, template, operator, limit, offset.
+    """
+    import re as _re
+    if not MONGO_AVAILABLE:
+        return jsonify({"error": "MongoDB unavailable"}), 503
+
+    limit = request.args.get("limit", 50, type=int)
+    offset = request.args.get("offset", 0, type=int)
+    limit = min(limit, 500)
+
+    conditions = []
+    # Date range filter
+    date_from = request.args.get("from", "").strip()
+    date_to = request.args.get("to", "").strip()
+    if date_from:
+        conditions.append({"timestamp": {"$gte": date_from}})
+    if date_to:
+        # Include the whole day
+        if len(date_to) == 10:
+            date_to += "T23:59:59.999999"
+        conditions.append({"timestamp": {"$lte": date_to}})
+
+    # Field filters (support * wildcard)
+    for param, field in [("serial", "serial"), ("template", "template_name"),
+                         ("operator", "operator"), ("status", "overall_status")]:
+        val = request.args.get(param, "").strip()
+        if val and val != "*":
+            segments = val.split("*")
+            pattern = ".*".join(_re.escape(s) for s in segments)
+            conditions.append({field: {"$regex": pattern, "$options": "i"}})
+
+    # Group filter (API keys with no group see everything)
+    grp_f = _group_filter()
+    if grp_f:
+        conditions.append(grp_f)
+
+    mongo_filter = {"$and": conditions} if len(conditions) > 1 else (
+        conditions[0] if conditions else {})
+
+    total = _results_col.count_documents(mongo_filter)
+    cursor = (_results_col.find(mongo_filter, {"_id": 0})
+              .sort("timestamp", -1).skip(offset).limit(limit))
+    results = []
+    for doc in cursor:
+        rid = doc.get("result_id", "")
+        # Enrich zone image fields with URL paths
+        for z in doc.get("zones", []):
+            if z.get("image"):
+                z["image_url"] = f"/api/v1/results/{rid}/images/{z['image']}"
+            for sz in z.get("subzones", []):
+                for img_field in ("image_defects", "image_heatmap",
+                                  "image_extracted", "image_reference"):
+                    if sz.get(img_field):
+                        sz[f"{img_field}_url"] = (
+                            f"/api/v1/results/{rid}/images/{sz[img_field]}")
+        results.append(doc)
+    return jsonify({"total": total, "limit": limit, "offset": offset,
+                    "results": results})
+
+
+@app.route("/api/v1/results/<rid>")
+def api_v1_get_result(rid):
+    """External API: get a single inspection result by result_id.
+    Optional ?images=base64 to inline images as data URIs."""
+    import re as _re
+    import base64
+    if not _re.match(r'^[a-zA-Z0-9_\-]+$', rid):
+        return jsonify({"error": "invalid result_id"}), 400
+    if not MONGO_AVAILABLE:
+        return jsonify({"error": "MongoDB unavailable"}), 503
+
+    q = {"result_id": rid}
+    q.update(_group_filter())
+    doc = _results_col.find_one(q, {"_id": 0})
+    if not doc:
+        return jsonify({"error": "not found"}), 404
+
+    inline = request.args.get("images", "").lower() == "base64"
+    for z in doc.get("zones", []):
+        if z.get("image"):
+            if inline:
+                data = r2.download_bytes(f"results/{rid}/{z['image']}")
+                z["image_base64"] = base64.b64encode(
+                    data).decode() if data else None
+            z["image_url"] = f"/api/v1/results/{rid}/images/{z['image']}"
+        for sz in z.get("subzones", []):
+            for img_field in ("image_defects", "image_heatmap",
+                              "image_extracted", "image_reference"):
+                fname = sz.get(img_field)
+                if fname:
+                    if inline:
+                        data = r2.download_bytes(f"results/{rid}/{fname}")
+                        sz[f"{img_field}_base64"] = (
+                            base64.b64encode(data).decode() if data else None)
+                    sz[f"{img_field}_url"] = (
+                        f"/api/v1/results/{rid}/images/{fname}")
+    return jsonify(doc)
+
+
+@app.route("/api/v1/results/<rid>/images/<fname>")
+def api_v1_result_image(rid, fname):
+    """External API: serve a result image from R2."""
+    import re
+    if (not re.match(r'^[a-zA-Z0-9_\-]+$', rid)
+            or not re.match(r'^[a-zA-Z0-9_\-]+\.jpg$', fname)):
+        return jsonify({"error": "invalid"}), 400
+    data = r2.download_bytes(f"results/{rid}/{fname}")
+    if not data:
+        return jsonify({"error": "not found"}), 404
+    return send_file(io.BytesIO(data), mimetype="image/jpeg")
+
+
+# ─── Internal results API (operators, full scope) ────────────────────────────
+
 @app.route("/api/results")
 def list_results():
     """List saved inspection results (most recent first).
@@ -1431,10 +1616,11 @@ def list_results():
         return jsonify({"error": "MongoDB unavailable"}), 503
 
     mongo_filter = {}
+    grp_f = _group_filter()
     if search:
         parts = [p.strip() for p in search.split("/")]
         conditions = []
-        # Part 1 → serial, Part 2 → template_name, Part 3 → operator
+        # Part 1 -> serial, Part 2 -> template_name, Part 3 -> operator
         field_map = ["serial", "template_name", "operator"]
         for i, part in enumerate(parts):
             if not part or part == "*":
@@ -1446,12 +1632,16 @@ def list_results():
                 conditions.append(
                     {field_map[i]: {"$regex": escaped, "$options": "i"}})
             else:
-                # Extra parts → search zones labels
+                # Extra parts -> search zones labels
                 conditions.append(
                     {"zones.label": {"$regex": escaped, "$options": "i"}})
+        if grp_f:
+            conditions.append(grp_f)
         if conditions:
             mongo_filter = {"$and": conditions} if len(
                 conditions) > 1 else conditions[0]
+    elif grp_f:
+        mongo_filter = grp_f
 
     total = _results_col.count_documents(mongo_filter)
     cursor = _results_col.find(mongo_filter, {"_id": 0}).sort("timestamp", -1)
@@ -1465,7 +1655,9 @@ def list_results():
 
 @app.route("/api/results", methods=["DELETE"])
 def clear_results():
-    """Delete all saved inspection results."""
+    """Delete all saved inspection results (admin only)."""
+    if getattr(request, "auth_role", "") != "admin":
+        return jsonify({"error": "Admin only"}), 403
     deleted = 0
     if MONGO_AVAILABLE:
         res = _results_col.delete_many({})
@@ -1498,8 +1690,10 @@ def list_templates():
     """Список сохранённых шаблонов."""
     if not MONGO_AVAILABLE:
         return jsonify({"error": "MongoDB unavailable"}), 503
-    docs = _templates_col.find({}, {"_id": 0, "id": 1, "name": 1, "zones": 1,
-                                    "created": 1, "barcode_mask": 1, "version": 1})
+    q = _group_filter()
+    docs = _templates_col.find(q, {"_id": 0, "id": 1, "name": 1, "zones": 1,
+                                   "created": 1, "barcode_mask": 1, "version": 1,
+                                   "group": 1})
     templates = []
     for d in docs:
         templates.append({
@@ -1509,6 +1703,7 @@ def list_templates():
             "created": d.get("created", ""),
             "barcode_mask": d.get("barcode_mask", ""),
             "version": d.get("version", 1),
+            "group": d.get("group", ""),
         })
     templates.sort(key=lambda t: t.get("created", ""))
     return jsonify({"templates": templates})
@@ -1517,6 +1712,9 @@ def list_templates():
 @app.route("/api/templates", methods=["POST"])
 def save_template():
     """Сохранить текущую сессию (изображение + зоны) как шаблон."""
+    err = _require_lead_or_admin()
+    if err:
+        return err
     if not MONGO_AVAILABLE:
         return jsonify({"error": "MongoDB unavailable"}), 503
     data = request.get_json(silent=True)
@@ -1557,6 +1755,7 @@ def save_template():
         "version": 1,
         "created": datetime.datetime.now().isoformat(),
         "versions": [],
+        "group": data.get("group", "").strip() if getattr(request, "auth_role", "") == "admin" else (getattr(request, "auth_group", "") or ""),
     }
     _templates_col.insert_one(meta)
 
@@ -1568,7 +1767,9 @@ def load_template(tid):
     """Загрузить шаблон → создать сессию с готовыми зонами."""
     if not MONGO_AVAILABLE:
         return jsonify({"error": "MongoDB unavailable"}), 503
-    meta = _templates_col.find_one({"id": tid}, {"_id": 0})
+    q = {"id": tid}
+    q.update(_group_filter())
+    meta = _templates_col.find_one(q, {"_id": 0})
     if not meta:
         return jsonify({"error": "Шаблон не найден"}), 404
 
@@ -1627,9 +1828,14 @@ def load_template(tid):
 @app.route("/api/templates/<tid>", methods=["DELETE"])
 def delete_template(tid):
     """Удалить шаблон."""
+    err = _require_lead_or_admin()
+    if err:
+        return err
     if not MONGO_AVAILABLE:
         return jsonify({"error": "MongoDB unavailable"}), 503
-    res = _templates_col.delete_one({"id": tid})
+    q = {"id": tid}
+    q.update(_group_filter())
+    res = _templates_col.delete_one(q)
     if res.deleted_count == 0:
         return jsonify({"error": "Шаблон не найден"}), 404
     # Also delete images from R2
@@ -1640,10 +1846,15 @@ def delete_template(tid):
 @app.route("/api/templates/<tid>", methods=["PUT"])
 def update_template(tid):
     """Update template (new version): archive old version, overwrite with new data."""
+    err = _require_lead_or_admin()
+    if err:
+        return err
     if not MONGO_AVAILABLE:
         return jsonify({"error": "MongoDB unavailable"}), 503
     import datetime
-    old_meta = _templates_col.find_one({"id": tid}, {"_id": 0})
+    q = {"id": tid}
+    q.update(_group_filter())
+    old_meta = _templates_col.find_one(q, {"_id": 0})
     if not old_meta:
         return jsonify({"error": "Шаблон не найден"}), 404
 
@@ -1692,8 +1903,11 @@ def list_template_versions(tid):
     """List version history for a template."""
     if not MONGO_AVAILABLE:
         return jsonify({"error": "MongoDB unavailable"}), 503
-    doc = _templates_col.find_one({"id": tid}, {"_id": 0, "name": 1, "version": 1,
-                                                "created": 1, "updated": 1, "versions": 1})
+    q = {"id": tid}
+    q.update(_group_filter())
+    doc = _templates_col.find_one(q, {"_id": 0, "name": 1, "version": 1,
+                                                "created": 1, "updated": 1, "versions": 1,
+                                                "group": 1})
     if not doc:
         return jsonify({"error": "Шаблон не найден"}), 404
 
@@ -1712,7 +1926,9 @@ def template_detail(tid):
     """Return full template data (meta + reference image b64) for editing."""
     if not MONGO_AVAILABLE:
         return jsonify({"error": "MongoDB unavailable"}), 503
-    meta = _templates_col.find_one({"id": tid}, {"_id": 0})
+    q = {"id": tid}
+    q.update(_group_filter())
+    meta = _templates_col.find_one(q, {"_id": 0})
     if not meta:
         return jsonify({"error": "Шаблон не найден"}), 404
 
@@ -1763,10 +1979,15 @@ def template_detail(tid):
 @app.route("/api/templates/<tid>/restore/<int:ver>", methods=["POST"])
 def restore_template_version(tid, ver):
     """Restore a template to a specific version (creating a new version)."""
+    err = _require_lead_or_admin()
+    if err:
+        return err
     if not MONGO_AVAILABLE:
         return jsonify({"error": "MongoDB unavailable"}), 503
     import datetime
-    doc = _templates_col.find_one({"id": tid}, {"_id": 0})
+    q = {"id": tid}
+    q.update(_group_filter())
+    doc = _templates_col.find_one(q, {"_id": 0})
     if not doc:
         return jsonify({"error": "Шаблон не найден"}), 404
 

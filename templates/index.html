@@ -26,10 +26,15 @@
                         value="0.51"></label>
             </div>
             <div style="display:flex;gap:8px;align-items:center">
-                <a href="/help" target="_blank"
+                <span id="auth-badge"
+                    style="font-size:12px;color:var(--muted);border:1px solid var(--border);padding:4px 10px;border-radius:6px;white-space:nowrap">{{
+                    auth_user }}
+                    <span>{{ auth_role }}{% if auth_group %} / {{ auth_group }}{% endif
+                        %}</span></span>
+                <a href="/doc" target="_blank"
                     style="font-size:11px;color:var(--muted);text-decoration:none;border:1px solid var(--border);padding:4px 10px;border-radius:6px;transition:color .2s"
                     onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'"
-                    title="Help / Docs">? Help</a>
+                    title="Documentation">? Doc</a>
                 <a href="/logout"
                     style="font-size:11px;color:var(--muted);text-decoration:none;border:1px solid var(--border);padding:4px 10px;border-radius:6px;transition:color .2s"
                     onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'"

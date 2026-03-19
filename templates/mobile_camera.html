@@ -852,7 +852,7 @@
             const zi = zonesInfo[currentZoneIdx] || {};
             const label = document.getElementById('zone-nav-label');
             const checkedMark = zi.checked ? ' <span class="zone-checked">✓</span>' : '';
-            label.innerHTML = `${zi.label || 'Zone ' + (currentZoneIdx + 1)}${checkedMark} <span style="opacity:.5;font-size:11px">${currentZoneIdx + 1}/${zonesInfo.length}</span>`;
+            label.innerHTML = `${zi.label || 'Zone ' + (currentZoneIdx + 1)}${checkedMark} <span style="opacity:1;font-size:12px">${currentZoneIdx + 1}/${zonesInfo.length}</span>`;
             document.getElementById('zone-prev').disabled = currentZoneIdx <= 0;
             document.getElementById('zone-next').disabled = currentZoneIdx >= zonesInfo.length - 1;
         }
