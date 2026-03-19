@@ -2600,7 +2600,19 @@
                         <span>PCB Inspect — Quality Control</span>
                         <span>${new Date().toISOString().slice(0, 19).replace('T', ' ')}</span>
                     </div>`;
-                window.print();
+
+                // Wait for all images inside the passport to finish rendering
+                const ppImgs = pp.querySelectorAll('img');
+                if (ppImgs.length === 0) {
+                    window.print();
+                } else {
+                    let remaining = ppImgs.length;
+                    const onReady = () => { if (--remaining <= 0) window.print(); };
+                    ppImgs.forEach(img => {
+                        if (img.complete) { onReady(); }
+                        else { img.onload = onReady; img.onerror = onReady; }
+                    });
+                }
             });
         }
 

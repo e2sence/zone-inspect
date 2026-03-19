@@ -190,6 +190,13 @@ AUTH_KEYS_PATH = BASE_DIR / "auth_keys.json"
 AUTH_COOKIE = "pcb_auth_key"
 AUTH_COOKIE_MAX_AGE = 30 * 86400  # 30 days
 
+# ─── Brute-force protection ──────────────────────────────────────────────────
+_LOGIN_MAX_ATTEMPTS = 5       # per window
+_LOGIN_WINDOW = 60            # seconds
+_LOGIN_LOCKOUT = 300          # seconds after exceeding limit
+_login_attempts: dict[str, list[float]] = {}  # ip -> [timestamps]
+_login_lockouts: dict[str, float] = {}        # ip -> lockout_until
+
 
 def _load_auth_keys() -> dict:
     """Load auth_keys.json (users + api_keys)."""
@@ -227,7 +234,9 @@ def _check_auth():
 
 
 # Routes that don't require auth
-_PUBLIC_PREFIXES = ("/login", "/static/", "/api/mobile/", "/mobile", "/doc", "/license")
+_PUBLIC_PREFIXES = ("/login", "/static/", "/api/mobile/",
+                    "/mobile", "/doc", "/license",
+                    "/robots.txt", "/sitemap.xml")
 
 
 def _require_read_scope():
@@ -297,6 +306,12 @@ def _no_cache(resp):
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
+    # Security headers
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    resp.headers["Permissions-Policy"] = "camera=(self), microphone=(), geolocation=()"
+    resp.headers["X-XSS-Protection"] = "1; mode=block"
     return resp
 
 
@@ -307,12 +322,35 @@ def login_page():
 
 @app.route("/login", methods=["POST"])
 def login_submit():
+    ip = request.remote_addr or "unknown"
+    now = time.time()
+
+    # Check lockout
+    locked_until = _login_lockouts.get(ip, 0)
+    if now < locked_until:
+        remaining = int(locked_until - now)
+        return jsonify({"error": f"Too many attempts. Retry in {remaining}s"}), 429
+
     data = request.get_json(silent=True) or {}
     key = data.get("key", "").strip()
     keys = _load_auth_keys()
     entry = keys.get("users", {}).get(key)
     if not entry:
+        # Record failed attempt
+        attempts = _login_attempts.setdefault(ip, [])
+        attempts.append(now)
+        # Trim old attempts outside the window
+        attempts[:] = [t for t in attempts if now - t < _LOGIN_WINDOW]
+        if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
+            _login_lockouts[ip] = now + _LOGIN_LOCKOUT
+            _login_attempts.pop(ip, None)
+            app.logger.warning("Login brute-force lockout: ip=%s", ip)
+            return jsonify({"error": f"Too many attempts. Retry in {_LOGIN_LOCKOUT}s"}), 429
         return jsonify({"error": "Invalid access key"}), 403
+
+    # Success — clear attempts
+    _login_attempts.pop(ip, None)
+    _login_lockouts.pop(ip, None)
     resp = jsonify({"status": "ok", "user": entry["name"]})
     resp.set_cookie(AUTH_COOKIE, key, max_age=AUTH_COOKIE_MAX_AGE,
                     httponly=True, samesite="Lax")
@@ -337,6 +375,45 @@ def license_page():
     if not license_path.exists():
         return "LICENSE file not found", 404
     return send_file(license_path, mimetype="text/plain")
+
+
+@app.route("/robots.txt")
+def robots_txt():
+    base = app.config["BASE_URL"] or request.host_url.rstrip("/")
+    lines = [
+        "User-agent: *",
+        "Allow: /doc",
+        "Allow: /login",
+        "Allow: /license",
+        "Disallow: /api/",
+        "Disallow: /uploads/",
+        "Disallow: /static/",
+        "",
+        f"Sitemap: {base}/sitemap.xml",
+    ]
+    resp = make_response("\n".join(lines), 200)
+    resp.headers["Content-Type"] = "text/plain"
+    return resp
+
+
+@app.route("/sitemap.xml")
+def sitemap_xml():
+    base = app.config["BASE_URL"] or request.host_url.rstrip("/")
+    urls = [
+        (f"{base}/doc", "monthly", "0.8"),
+        (f"{base}/login", "yearly", "0.3"),
+        (f"{base}/license", "yearly", "0.1"),
+    ]
+    xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>',
+                 '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
+    for loc, freq, prio in urls:
+        xml_parts.append(f"  <url><loc>{loc}</loc>"
+                         f"<changefreq>{freq}</changefreq>"
+                         f"<priority>{prio}</priority></url>")
+    xml_parts.append("</urlset>")
+    resp = make_response("\n".join(xml_parts), 200)
+    resp.headers["Content-Type"] = "application/xml"
+    return resp
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
