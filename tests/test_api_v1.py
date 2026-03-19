@@ -28,7 +28,8 @@ class TestApiV1Results:
         assert data["limit"] == 5
 
     def test_list_with_date_filter(self, authed_client):
-        resp = authed_client.get("/api/v1/results?from=2020-01-01&to=2099-12-31")
+        resp = authed_client.get(
+            "/api/v1/results?from=2020-01-01&to=2099-12-31")
         assert resp.status_code == 200
 
     def test_list_with_serial_filter(self, authed_client):

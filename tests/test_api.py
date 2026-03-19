@@ -7,8 +7,6 @@ import pytest
 
 pytestmark = [pytest.mark.api, pytest.mark.auth]
 
-import pytest
-
 
 class TestCreateSession:
     def test_success(self, authed_client, test_image_bytes):

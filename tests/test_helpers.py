@@ -1,12 +1,12 @@
 """Unit tests for helper functions in app.py."""
 
+import numpy as np
 import base64
 
 import cv2
 import pytest
 
 pytestmark = pytest.mark.unit
-import numpy as np
 
 
 # ── _allowed ──────────────────────────────────────────────────────────────────

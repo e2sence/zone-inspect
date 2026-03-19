@@ -1,13 +1,12 @@
 """Edge-case and robustness tests."""
 
+import numpy as np
 import io
 
 import cv2
 import pytest
 
 pytestmark = pytest.mark.edge
-import numpy as np
-import pytest
 
 
 class TestLargeImage:
@@ -41,7 +40,8 @@ class TestCorruptImage:
         """Random bytes with .jpg extension → 400 (can't decode)."""
         resp = authed_client.post(
             "/api/session",
-            data={"image": (io.BytesIO(b"\xff\xd8\xff\x00garbage"), "bad.jpg")},
+            data={"image": (io.BytesIO(
+                b"\xff\xd8\xff\x00garbage"), "bad.jpg")},
             content_type="multipart/form-data",
         )
         assert resp.status_code == 400
@@ -144,6 +144,6 @@ class TestAnalyzeDefects:
         from app import _analyze_defects
         result = _analyze_defects(test_image, test_image.copy())
         for key in ("ssim", "defect_pct", "defect_count", "verdict",
-                     "status", "vis_defects_b64", "vis_heatmap_b64",
-                     "extracted_b64", "reference_b64"):
+                    "status", "vis_defects_b64", "vis_heatmap_b64",
+                    "extracted_b64", "reference_b64"):
             assert key in result, f"missing key: {key}"
