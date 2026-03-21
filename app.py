@@ -24,6 +24,7 @@ import uuid
 import base64
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
@@ -165,12 +166,16 @@ def _remove_tokens_for_session(sid: str):
 # session_id → list of uploaded photo blobs (bytes) from mobile
 mobile_photos: dict[str, list[bytes]] = {}
 
+# Thread pool for background R2 uploads (non-blocking save)
+_r2_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="r2")
+
 # ─── Session TTL cleanup (60 min) ────────────────────────────────────────────
 SESSION_TTL = 3600  # seconds
 
 
 def _cleanup_sessions():
     """Remove sessions inactive for more than SESSION_TTL."""
+    import gc
     while True:
         time.sleep(120)  # check every 2 min
         now = time.time()
@@ -182,6 +187,27 @@ def _cleanup_sessions():
             mobile_photos.pop(sid, None)
             # Remove mobile tokens pointing to this session
             _remove_tokens_for_session(sid)
+        if expired:
+            gc.collect()
+        # Purge stale login attempts / lockouts
+        cutoff = now - 3600
+        for ip in list(_login_attempts):
+            _login_attempts[ip] = [
+                t for t in _login_attempts[ip] if t > cutoff]
+            if not _login_attempts[ip]:
+                del _login_attempts[ip]
+        for ip in list(_login_lockouts):
+            if _login_lockouts[ip] < now:
+                del _login_lockouts[ip]
+        # Log memory usage summary
+        n_sess = len(sessions)
+        n_photos = sum(len(v) for v in mobile_photos.values())
+        n_checked = sum(len(s.get("checked", {})) for s in sessions.values())
+        if n_sess or expired:
+            import logging
+            logging.getLogger(__name__).info(
+                "Sessions: %d active, %d expired | checked zones in mem: %d | mobile photos queued: %d",
+                n_sess, len(expired), n_checked, n_photos)
 
 
 _cleanup_thread = threading.Thread(target=_cleanup_sessions, daemon=True)
@@ -1394,6 +1420,8 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
         "zones": [],
         "overall_status": "ok",
     }
+    # (path, data_bytes, content_type) — queued for parallel R2 upload
+    _uploads = []
     for i, z in enumerate(s["zones"]):
         info = s["checked"].get(i, {})
         di = info.get("defect_info", {})
@@ -1410,14 +1438,14 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
         # User decision override
         if i in user_decisions:
             zone_rec["user_decision"] = user_decisions[i]
-        # Upload zone photo to R2
+        # Queue zone photo for R2 upload
         photo_b64 = info.get("photo_b64")
         if photo_b64:
-            r2.upload_bytes(
-                prefix + f"zone_{i}.jpg", base64.b64decode(photo_b64), "image/jpeg")
+            _uploads.append((prefix + f"zone_{i}.jpg",
+                             base64.b64decode(photo_b64), "image/jpeg"))
             zone_rec["image"] = f"zone_{i}.jpg"
 
-        # Upload subzone images to R2 and store subzone metadata
+        # Queue subzone images for R2 upload and store subzone metadata
         sz_results = info.get("subzone_results", [])
         if sz_results:
             sz_recs = []
@@ -1431,30 +1459,26 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
                 vis_b64 = sr.get("vis_defects_b64")
                 if vis_b64:
                     fname = f"zone_{i}_sub_{szi}_defects.jpg"
-                    r2.upload_bytes(
-                        prefix + fname,
-                        base64.b64decode(vis_b64), "image/jpeg")
+                    _uploads.append((prefix + fname,
+                                     base64.b64decode(vis_b64), "image/jpeg"))
                     sz_rec["image_defects"] = fname
                 heat_b64 = sr.get("vis_heatmap_b64")
                 if heat_b64:
                     fname = f"zone_{i}_sub_{szi}_heatmap.jpg"
-                    r2.upload_bytes(
-                        prefix + fname,
-                        base64.b64decode(heat_b64), "image/jpeg")
+                    _uploads.append((prefix + fname,
+                                     base64.b64decode(heat_b64), "image/jpeg"))
                     sz_rec["image_heatmap"] = fname
                 ext_b64 = sr.get("extracted_b64")
                 if ext_b64:
                     fname = f"zone_{i}_sub_{szi}_extracted.jpg"
-                    r2.upload_bytes(
-                        prefix + fname,
-                        base64.b64decode(ext_b64), "image/jpeg")
+                    _uploads.append((prefix + fname,
+                                     base64.b64decode(ext_b64), "image/jpeg"))
                     sz_rec["image_extracted"] = fname
                 ref_b64 = sr.get("reference_b64")
                 if ref_b64:
                     fname = f"zone_{i}_sub_{szi}_reference.jpg"
-                    r2.upload_bytes(
-                        prefix + fname,
-                        base64.b64decode(ref_b64), "image/jpeg")
+                    _uploads.append((prefix + fname,
+                                     base64.b64decode(ref_b64), "image/jpeg"))
                     sz_rec["image_reference"] = fname
                 # User sub-decision override
                 if i in user_sub_decisions and szi in user_sub_decisions[i]:
@@ -1482,7 +1506,7 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
         elif effective == "warn" and record["overall_status"] == "ok":
             record["overall_status"] = "warn"
 
-    # Upload reference crop per zone to R2
+    # Queue reference crop per zone for R2 upload
     ref_img = s.get("ref_img")
     if ref_img is not None:
         for i, z in enumerate(s["zones"]):
@@ -1490,8 +1514,8 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
             if crop is not None:
                 _, buf = cv2.imencode(
                     ".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
-                r2.upload_bytes(
-                    prefix + f"ref_{i}.jpg", buf.tobytes(), "image/jpeg")
+                _uploads.append(
+                    (prefix + f"ref_{i}.jpg", buf.tobytes(), "image/jpeg"))
 
     # Save metadata: MongoDB (primary) with R2 fallback
     if MONGO_AVAILABLE:
@@ -1502,8 +1526,21 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
 
     # Append to daily log (R2)
     day = ts.strftime("%Y-%m-%d")
-    r2.append_line(f"logs/log_{day}.jsonl",
-                   json.dumps(record, ensure_ascii=False))
+    _uploads.append((f"logs/log_{day}.jsonl",
+                     json.dumps(record, ensure_ascii=False).encode(), None))
+
+    # Fire all R2 uploads in parallel (non-blocking)
+    def _do_upload(path, data, ct):
+        try:
+            if ct is None:
+                r2.append_line(path, data.decode())
+            else:
+                r2.upload_bytes(path, data, ct)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("R2 upload failed: %s", path)
+    for u in _uploads:
+        _r2_pool.submit(_do_upload, *u)
 
     return record, rid
 
@@ -1536,6 +1573,9 @@ def save_result(sid):
     record, rid = _save_inspection_record(
         sessions[sid], sid, user_decisions=user_decisions,
         user_sub_decisions=user_sub_decisions)
+    # Free heavy in-memory blobs — images already persisted to R2/MongoDB
+    sessions[sid]["checked"] = {}
+    mobile_photos.pop(sid, None)
     return jsonify({"status": "ok", "overall": record["overall_status"], "result_id": rid})
 
 
@@ -2471,6 +2511,9 @@ def mobile_zone_photo(token):
     if sid not in mobile_photos:
         mobile_photos[sid] = []
     mobile_photos[sid].append(photo_bytes)
+    # Cap queue to prevent unbounded memory growth
+    while len(mobile_photos[sid]) > 30:
+        mobile_photos[sid].pop(0)
 
     return jsonify({"status": "ok", "count": len(mobile_photos[sid])})
 
