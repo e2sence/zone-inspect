@@ -15,9 +15,9 @@
 set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────────────
-SERVER="${DEPLOY_SERVER}"
-APP_DIR="/opt/pcb-inspect"
-SERVICE="pcb-inspect"
+SERVER="${DEPLOY_SERVER:?Set DEPLOY_SERVER env var, e.g. user@host}"
+APP_DIR="${DEPLOY_APP_DIR:-/opt/pcb-inspect}"
+SERVICE="${DEPLOY_SERVICE:-pcb-inspect}"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # SSH multiplexing — one TCP connection reused for all commands

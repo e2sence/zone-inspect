@@ -6,7 +6,7 @@
 #═══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-SERVER="${DEPLOY_SERVER}"
+SERVER="${DEPLOY_SERVER:?Set DEPLOY_SERVER env var, e.g. user@host}"
 SSH="ssh -o ConnectTimeout=15 $SERVER"
 
 BOLD='\033[1m'

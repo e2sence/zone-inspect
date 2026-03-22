@@ -10,7 +10,7 @@
 #═══════════════════════════════════════════════════════════════════════════════
 set -u
 
-SERVER="${DEPLOY_SERVER}"
+SERVER="${DEPLOY_SERVER:?Set DEPLOY_SERVER env var, e.g. user@host}"
 SSH="ssh -o ConnectTimeout=15 -o ServerAliveInterval=5 $SERVER"
 
 RED='\033[0;31m'
