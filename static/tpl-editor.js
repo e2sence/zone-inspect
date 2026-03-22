@@ -298,6 +298,7 @@
                 el.innerHTML = szs.map((sz, i) => `
                     <span style="display:inline-flex;align-items:center;gap:3px;background:#ff6b6b22;border:1px solid #ff6b6b55;border-radius:4px;padding:2px 6px" data-te-sz-chip="${i}">
                         <input value="${sz.label}" data-te-sz-label="${i}" style="width:36px;background:none;border:none;color:#ff6b6b;font-size:11px;padding:0;font-weight:bold;cursor:text">
+                        <input value="${sz.sensitivity != null ? sz.sensitivity : ''}" data-te-sz-sens="${i}" placeholder="sns" title="Per-subzone sensitivity (0..2). Empty = use global" style="width:42px;background:#ff6b6b11;border:1px dashed #ff6b6b55;border-radius:3px;color:#ff6b6b;font-size:12px;padding:1px 3px;text-align:center;cursor:text">
                         <span data-te-sz-rm="${i}" style="cursor:pointer;opacity:.7;font-size:13px" title="Delete">&times;</span>
                     </span>`).join('');
                 el.querySelectorAll('[data-te-sz-label]').forEach(inp => {
@@ -306,6 +307,16 @@
                         if (teZones[teSelectedZone] && teZones[teSelectedZone].subzones[si]) {
                             teZones[teSelectedZone].subzones[si].label = inp.value;
                             teDrawCanvas();
+                        }
+                    });
+                });
+                el.querySelectorAll('[data-te-sz-sens]').forEach(inp => {
+                    inp.addEventListener('change', () => {
+                        const si = +inp.dataset.teSzSens;
+                        if (teZones[teSelectedZone] && teZones[teSelectedZone].subzones[si]) {
+                            const v = inp.value.trim();
+                            teZones[teSelectedZone].subzones[si].sensitivity = v === '' ? null : Math.max(0, Math.min(2, parseFloat(v) || 0));
+                            inp.value = teZones[teSelectedZone].subzones[si].sensitivity != null ? teZones[teSelectedZone].subzones[si].sensitivity : '';
                         }
                     });
                 });
@@ -381,7 +392,7 @@
                     if (cw < 0.01 || ch < 0.01) { toast('Subzone outside zone', 'warn'); teDrawCanvas(); return; }
                     const szx = (cx1 - pz.x) / pz.w, szy = (cy1 - pz.y) / pz.h;
                     const szw = cw / pz.w, szh = ch / pz.h;
-                    pz.subzones.push({ x: szx, y: szy, w: szw, h: szh, label: `S${pz.subzones.length + 1}` });
+                    pz.subzones.push({ x: szx, y: szy, w: szw, h: szh, label: `S${pz.subzones.length + 1}`, sensitivity: null });
                     teDrawCanvas(); teRenderZones(); teRenderSubzoneChips();
                     return;
                 }

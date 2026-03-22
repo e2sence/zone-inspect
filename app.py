@@ -170,12 +170,18 @@ mobile_photos: dict[str, list[bytes]] = {}
 _r2_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="r2")
 
 # ─── Session TTL cleanup (60 min) ────────────────────────────────────────────
-SESSION_TTL = 3600  # seconds
+SESSION_TTL = 1800  # seconds (30 min)
 
 
 def _cleanup_sessions():
     """Remove sessions inactive for more than SESSION_TTL."""
     import gc
+    import ctypes
+    try:
+        _libc = ctypes.CDLL("libc.so.6")
+        _malloc_trim = _libc.malloc_trim
+    except (OSError, AttributeError):
+        _malloc_trim = None  # macOS / non-glibc
     while True:
         time.sleep(120)  # check every 2 min
         now = time.time()
@@ -189,6 +195,8 @@ def _cleanup_sessions():
             _remove_tokens_for_session(sid)
         if expired:
             gc.collect()
+            if _malloc_trim:
+                _malloc_trim(0)  # return freed memory to OS
         # Purge stale login attempts / lockouts
         cutoff = now - 3600
         for ip in list(_login_attempts):
@@ -982,6 +990,13 @@ def set_zones(sid):
                     return jsonify({"error": f"Zone {i}, subzone {j}: missing '{key}'"}), 400
             if "label" not in sz:
                 sz["label"] = f"Subzone {j + 1}"
+            # Optional per-subzone sensitivity override (0..2 or null)
+            if "sensitivity" in sz and sz["sensitivity"] is not None:
+                try:
+                    sz["sensitivity"] = max(
+                        0.0, min(2.0, float(sz["sensitivity"])))
+                except (ValueError, TypeError):
+                    sz.pop("sensitivity", None)
         z["subzones"] = subzones
 
     sessions[sid]["zones"] = zones
@@ -1228,14 +1243,21 @@ def _check_zone_impl(sid, photo_img=None):
                 all_imgs.append(sz_ext)
             all_feats = extract_features_batch(all_imgs)
             for pi, (szi, sz, sz_ref, sz_ext) in enumerate(sz_pairs):
+                # Per-subzone sensitivity override
+                _sz_sens = sz.get("sensitivity")
+                if _sz_sens is not None:
+                    _cfg.apply_subzone_sensitivity(_sz_sens)
                 zf = all_feats[pi * 2]
                 ef = all_feats[pi * 2 + 1]
                 sz_defect = _analyze_defects(
                     sz_ref, sz_ext, best_score, strict=True,
                     zone_feats=zf, extracted_feats=ef)
+                if _sz_sens is not None:
+                    _cfg.apply_subzone_sensitivity(subzone_sens)
                 subzone_results.append({
                     "index": szi,
                     "label": sz.get("label", f"Subzone {szi + 1}"),
+                    "sensitivity": _sz_sens,
                     "status": sz_defect["status"],
                     "verdict": sz_defect["verdict"],
                     "defect_pct": sz_defect["defect_pct"],
@@ -1247,11 +1269,18 @@ def _check_zone_impl(sid, photo_img=None):
                 })
         else:
             for szi, sz, sz_ref, sz_ext in sz_pairs:
+                # Per-subzone sensitivity override
+                _sz_sens = sz.get("sensitivity")
+                if _sz_sens is not None:
+                    _cfg.apply_subzone_sensitivity(_sz_sens)
                 sz_defect = _analyze_defects(sz_ref, sz_ext, best_score,
                                              strict=True)
+                if _sz_sens is not None:
+                    _cfg.apply_subzone_sensitivity(subzone_sens)
                 subzone_results.append({
                     "index": szi,
                     "label": sz.get("label", f"Subzone {szi + 1}"),
+                    "sensitivity": _sz_sens,
                     "status": sz_defect["status"],
                     "verdict": sz_defect["verdict"],
                     "defect_pct": sz_defect["defect_pct"],

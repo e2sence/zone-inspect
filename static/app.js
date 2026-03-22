@@ -602,7 +602,7 @@
                 const szy = (cy1 - pz.y) / pz.h;
                 const szw = cw / pz.w;
                 const szh = ch / pz.h;
-                pz.subzones.push({ x: szx, y: szy, w: szw, h: szh, label: `S${pz.subzones.length + 1}` });
+                pz.subzones.push({ x: szx, y: szy, w: szw, h: szh, label: `S${pz.subzones.length + 1}`, sensitivity: null });
                 drawCanvas(); renderZoneChips(); renderSubzoneChips();
                 return;
             }
@@ -658,6 +658,7 @@
             el.innerHTML = szs.map((sz, i) => `
                 <span style="display:inline-flex;align-items:center;gap:3px;background:#ff6b6b22;border:1px solid #ff6b6b55;border-radius:4px;padding:2px 6px" data-sz-chip="${i}">
                     <input value="${sz.label}" data-sz-label="${i}" style="width:36px;background:none;border:none;color:#ff6b6b;font-size:11px;padding:0;font-weight:bold;cursor:text">
+                    <input value="${sz.sensitivity != null ? sz.sensitivity : ''}" data-sz-sens="${i}" placeholder="sns" title="Per-subzone sensitivity (0..2). Empty = use global" style="width:42px;background:#ff6b6b11;border:1px dashed #ff6b6b55;border-radius:3px;color:#ff6b6b;font-size:12px;padding:1px 3px;text-align:center;cursor:text">
                     <span data-sz-rm="${i}" style="cursor:pointer;opacity:.7;font-size:13px" title="Delete subzone">&times;</span>
                 </span>`).join('');
             el.querySelectorAll('[data-sz-label]').forEach(inp => {
@@ -666,6 +667,16 @@
                     if (zones[selectedZone] && zones[selectedZone].subzones[si]) {
                         zones[selectedZone].subzones[si].label = inp.value;
                         drawCanvas();
+                    }
+                });
+            });
+            el.querySelectorAll('[data-sz-sens]').forEach(inp => {
+                inp.addEventListener('change', () => {
+                    const si = +inp.dataset.szSens;
+                    if (zones[selectedZone] && zones[selectedZone].subzones[si]) {
+                        const v = inp.value.trim();
+                        zones[selectedZone].subzones[si].sensitivity = v === '' ? null : Math.max(0, Math.min(2, parseFloat(v) || 0));
+                        inp.value = zones[selectedZone].subzones[si].sensitivity != null ? zones[selectedZone].subzones[si].sensitivity : '';
                     }
                 });
             });
@@ -799,7 +810,7 @@
                         <option value="warn"${effective === 'warn' ? ' selected' : ''}>WARN</option>
                         <option value="defect"${effective === 'defect' ? ' selected' : ''}>DEFECT</option>
                     </select>
-                    <span style="font-size:11px;color:var(--muted)">SSIM ${(sz.ssim * 100).toFixed(1)}% · Defect ${sz.defect_pct.toFixed(1)}%</span>
+                    <span style="font-size:11px;color:var(--muted)">SSIM ${(sz.ssim * 100).toFixed(1)}% · Defect ${sz.defect_pct.toFixed(1)}%${sz.sensitivity != null ? ` · sens ${sz.sensitivity.toFixed(2)}` : ''}</span>
                 </div>`;
             }
             html += '<div class="sz-thumbs" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">';

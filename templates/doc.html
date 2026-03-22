@@ -421,6 +421,57 @@
                             mobile.
                             <span class="kw">No installation required.</span> Just open the browser and inspect.
                         </p>
+
+                        <h4>Detection Pipeline</h4>
+                        <p>Every uploaded photo goes through a multi-stage pipeline to find and analyze the matching
+                            zone:</p>
+
+                        <p><strong>1. Global Alignment</strong> — the input image is aligned to the reference board
+                            using <span class="kw">SIFT</span> feature matching (5000 keypoints) with FLANN matcher
+                            and <span class="kw">RANSAC homography</span>. This warps the photo to overlap precisely
+                            with the reference, compensating for camera angle, position, and scale.</p>
+
+                        <p><strong>2. Zone Matching</strong> — each zone is extracted from the warped image and ranked:
+                        </p>
+                        <ul>
+                            <li><span class="kw">SSIM pre-ranking</span> — all zones scored quickly; top-3 advance.</li>
+                            <li><span class="kw">Neural scoring</span> — EfficientNet-B4 global cosine similarity
+                                (pooled layer-7 features) picks the best match above 0.55 threshold.</li>
+                            <li><span class="kw">Fallback strategies</span> — if global homography fails: local SIFT
+                                per zone, then template matching.</li>
+                        </ul>
+
+                        <p><strong>3. Defect Detection</strong> — the matched pair (reference vs. extracted) is
+                            analyzed:</p>
+                        <ul>
+                            <li><span class="kw">CLAHE</span> contrast normalization on both images.</li>
+                            <li><span class="kw">Global similarity</span> — cosine on EfficientNet-B4 layer-7
+                                (semantic level).</li>
+                            <li><span class="kw">SSIM map</span> — per-pixel structural similarity to find
+                                difference regions.</li>
+                            <li><span class="kw">Patch CNN map</span> — layer-5 spatial features compared
+                                patch-by-patch, producing a similarity heatmap.</li>
+                            <li><span class="kw">Texture weighting</span> — flat regions are down-weighted to
+                                reduce false positives.</li>
+                            <li><span class="kw">Verdict</span> — weighted defect % vs. sensitivity thresholds:
+                                <span class="tag-ok">OK</span> /
+                                <span class="tag-warn">WARN</span> /
+                                <span class="tag-def">DEFECT</span>.
+                            </li>
+                        </ul>
+                        <p>Final similarity = <code>50% global cosine (layer 7) + 50% patch cosine (layer 5)</code>.</p>
+
+                        <p><strong>4. Subzone Analysis</strong> — subzones use <span class="kw">stricter
+                                thresholds</span> plus HSV histogram comparison to catch completely different
+                            components. Zone verdict = worst status across all subzones.</p>
+
+                        <p><strong>5. Reference Blending</strong> — the auto-blend module aligns multiple
+                            photos via SIFT (with barcode/QR anchor detection) and <span
+                                class="kw">pixel-averages</span>
+                            them into a clean, noise-reduced reference.</p>
+
+                        <div class="note">OpenCV fallback: when the neural engine is unavailable, the system uses
+                            CLAHE + SSIM + edge analysis + contour-based measurement.</div>
                     </div>
                 </div>
 
@@ -969,6 +1020,57 @@ curl -s "$HOST/api/v1/results"
                         <p>Создано для производства. Доступно с <span class="kw">любого устройства</span> — компьютера
                             или телефона. <span class="kw">Установка не требуется</span> — просто откройте браузер
                             и начните инспекцию.</p>
+
+                        <h4>Конвейер распознавания</h4>
+                        <p>Каждая загруженная фотография проходит многоэтапный конвейер для поиска и анализа совпадающей
+                            зоны:</p>
+
+                        <p><strong>1. Глобальное выравнивание</strong> — входное изображение совмещается с эталоном
+                            методом <span class="kw">SIFT</span> (5000 ключевых точек) с FLANN-матчером
+                            и <span class="kw">гомографией RANSAC</span>. Это компенсирует угол, положение
+                            и масштаб камеры.</p>
+
+                        <p><strong>2. Сопоставление зон</strong> — из выровненного изображения извлекается каждая зона и
+                            ранжируется:</p>
+                        <ul>
+                            <li><span class="kw">SSIM-ранжирование</span> — быстрая оценка всех зон; 3 лучших проходят
+                                дальше.</li>
+                            <li><span class="kw">Нейросетевой скоринг</span> — EfficientNet-B4 считает глобальное
+                                косинусное сходство (пулинг layer-7). Лучшее совпадение выше порога 0.55 побеждает.</li>
+                            <li><span class="kw">Запасные стратегии</span> — если глобальная гомография не удалась:
+                                локальный SIFT для зоны, затем шаблонное сопоставление.</li>
+                        </ul>
+
+                        <p><strong>3. Детектирование дефектов</strong> — сравниваются эталон и извлечение:</p>
+                        <ul>
+                            <li><span class="kw">CLAHE</span> — нормализация контраста обоих изображений.</li>
+                            <li><span class="kw">Глобальное сходство</span> — косинус на признаках EfficientNet-B4
+                                layer-7 (семантический уровень).</li>
+                            <li><span class="kw">Карта SSIM</span> — попиксельное структурное сходство для
+                                выявления различий.</li>
+                            <li><span class="kw">Патч-CNN карта</span> — пространственные признаки layer-5
+                                сравниваются попатчево, формируя тепловую карту сходства.</li>
+                            <li><span class="kw">Текстурное взвешивание</span> — плоские области получают
+                                пониженный вес для снижения ложных срабатываний.</li>
+                            <li><span class="kw">Вердикт</span> — взвешенный % дефектов vs. пороги чувствительности:
+                                <span class="tag-ok">OK</span> /
+                                <span class="tag-warn">WARN</span> /
+                                <span class="tag-def">DEFECT</span>.
+                            </li>
+                        </ul>
+                        <p>Итоговое сходство =
+                            <code>50% глобальный косинус (layer 7) + 50% патч-косинус (layer 5)</code>.</p>
+
+                        <p><strong>4. Анализ подзон</strong> — подзоны используют <span class="kw">ужесточённые
+                                пороги</span> и HSV-гистограммное сравнение для выявления полностью отличающихся
+                            компонентов. Вердикт зоны = наихудший статус среди подзон.</p>
+
+                        <p><strong>5. Блендинг эталона</strong> — модуль auto-blend выравнивает несколько
+                            фотографий через SIFT (с обнаружением штрихкодов/QR как опорных точек)
+                            и <span class="kw">усредняет их попиксельно</span> для получения чистого эталона.</p>
+
+                        <div class="note">OpenCV-фоллбэк: при отсутствии нейродвижка система использует
+                            CLAHE + SSIM + анализ рёбер + контурное измерение.</div>
                     </div>
                 </div>
 
