@@ -1,14 +1,14 @@
-# PCB Zone Check
+# Zone Inspect
 
-Visual inspection and defect analysis system for printed circuit boards.
+Visual inspection and defect analysis system powered by neural networks.
 
 ## Overview
 
-PCB Zone Check is a web-based inspection platform that uses neural network analysis (EfficientNet-B4) to detect defects on PCB assemblies by comparing photographed boards against reference templates.
+Zone Inspect is a web-based inspection platform that uses neural network analysis (EfficientNet-B4) to detect defects and deviations by comparing photographed assemblies against reference templates. Originally designed for PCB inspection, the system is equally effective for mechanical assemblies, wire harnesses, connectors, and any production component that can be visually compared to a reference.
 
 ## Key Features
 
-- **Template-based inspection** -- define zones on a reference board, inspect against live photos
+- **Template-based inspection** -- define zones on a reference image, inspect against live photos
 - **Neural network analysis** -- EfficientNet-B4 model for defect detection with configurable sensitivity
 - **Subzone decomposition** -- automatic splitting of large zones for granular analysis
 - **Mobile camera support** -- use a phone as a wireless camera via QR-code pairing
@@ -23,7 +23,7 @@ The inspection pipeline runs in several stages for each uploaded photo:
 
 ### 1. Global Alignment
 
-The input photo is aligned to the reference board using SIFT feature matching (5000 keypoints) with FLANN-based matching and RANSAC homography. This produces a warped image that overlaps precisely with the reference, compensating for camera angle, position, and scale differences.
+The input photo is aligned to the reference image using SIFT feature matching (5000 keypoints) with FLANN-based matching and RANSAC homography. This produces a warped image that overlaps precisely with the reference, compensating for camera angle, position, and scale differences.
 
 ### 2. Zone Matching
 
@@ -56,7 +56,7 @@ When the neural engine is unavailable, the system falls back to: CLAHE normaliza
 
 ### 6. Reference Blending
 
-The auto-blend module aligns multiple photos of the same board using SIFT (with barcode/QR anchor detection as fallback) and pixel-averages them to produce a clean, noise-reduced reference image.
+The auto-blend module aligns multiple photos of the same object using SIFT (with barcode/QR anchor detection as fallback) and pixel-averages them to produce a clean, noise-reduced reference image.
 
 ## Tech Stack
 

@@ -39,7 +39,7 @@ fi
 export BASE_URL="$CF_URL"
 
 echo "════════════════════════════════════════"
-echo "  PCB Inspect — Local Dev Server"
+echo "  Zone Inspect — Local Dev Server"
 echo "  Local:    http://localhost:$PORT"
 echo "  Mobile:   ${CF_URL}  (постоянный)"
 echo "════════════════════════════════════════"

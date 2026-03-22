@@ -1,6 +1,6 @@
 """
 Cloudflare R2 storage layer (S3-compatible).
-Provides upload / download / delete / list operations for the PCB inspection app.
+Provides upload / download / delete / list operations for the Zone Inspect app.
 """
 
 import io

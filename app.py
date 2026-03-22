@@ -1,11 +1,11 @@
 """
-PCB Zone Check — проверка зон печатной платы.
+Zone Inspect — visual zone-based inspection system.
 
 Workflow:
-  1. Загрузить референсное изображение платы
-  2. Разметить зоны контроля (прямоугольники)
-  3. Загружать фото зон по одному — система сопоставляет каждое фото с зоной
-  4. Все зоны проверены → готово
+  1. Upload a reference image of the assembly
+  2. Define inspection zones (rectangles)
+  3. Upload zone photos one by one — the system matches each photo to a zone
+  4. All zones checked → done
 """
 
 # Load .env before any other imports that use os.environ

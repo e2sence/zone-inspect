@@ -1,4 +1,4 @@
-"""Shared fixtures for PCB Zone Check tests."""
+"""Shared fixtures for Zone Inspect tests."""
 
 import json
 import os

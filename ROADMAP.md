@@ -1,4 +1,4 @@
-# PCB Zone Check -- Road Map
+# Zone Inspect -- Road Map
 
 ## 1. Quality Gate (pre-inspection photo check)
 

@@ -1,4 +1,4 @@
-# gunicorn.conf.py — Production config for PCB Inspect
+# gunicorn.conf.py — Production config for Zone Inspect
 import multiprocessing
 import os
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #═══════════════════════════════════════════════════════════════════════════════
-#  deploy.sh — One-command deploy for PCB Inspect
+#  deploy.sh — One-command deploy for Zone Inspect
 #
 #  Usage:
 #    ./deploy.sh diff      — show what differs between local and production
@@ -134,7 +134,7 @@ cmd_diff_detail() {
 
 cmd_deploy() {
     echo -e "${BOLD}═══════════════════════════════════════════════════════${NC}"
-    echo -e "${BOLD}  PCB Inspect — Deploy local → production${NC}"
+    echo -e "${BOLD}  Zone Inspect — Deploy local → production${NC}"
     echo -e "${BOLD}═══════════════════════════════════════════════════════${NC}"
     echo ""
 
@@ -223,7 +223,7 @@ case "$CMD" in
     restart)     cmd_restart ;;
     ssh)         cmd_ssh ;;
     *)
-        echo "PCB Inspect Deploy Tool"
+        echo "Zone Inspect Deploy Tool"
         echo ""
         echo "Usage: ./deploy.sh <command>"
         echo ""

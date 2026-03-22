@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ─── PCB Zone Check — Test Runner ────────────────────────────────────────────
+# ─── Zone Inspect — Test Runner ──────────────────────────────────────────────
 set -euo pipefail
 cd "$(dirname "$0")"
 

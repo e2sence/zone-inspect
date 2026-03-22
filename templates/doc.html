@@ -4,14 +4,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PCB Zone Check — Documentation</title>
+    <title>Zone Inspect — Documentation</title>
     <meta name="description"
-        content="PCB Zone Check documentation — visual inspection system for printed circuit boards using neural network analysis. Setup, workflow, API reference.">
+        content="Zone Inspect documentation — AI-powered visual inspection system with neural network analysis. Setup, workflow, API reference.">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://inspect.metaprodtrace.com/doc">
-    <meta property="og:title" content="PCB Zone Check — Documentation">
+    <meta property="og:title" content="Zone Inspect — Documentation">
     <meta property="og:description"
-        content="Visual inspection system for printed circuit boards. Neural-network-powered zone comparison, template management, and reporting.">
+        content="AI-powered visual inspection system. Neural-network-powered zone comparison, template management, and reporting.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://inspect.metaprodtrace.com/doc">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -370,12 +370,12 @@
     <div class="container">
         <header>
             <div>
-                <h1>PCB Zone Check</h1>
+                <h1>Zone Inspect</h1>
                 <p>// documentation &amp; reference</p>
             </div>
             <div class="hdr-links">
                 <a href="/">Back to App</a>
-                <a href="mailto:support@metaprodtrace.com?subject=PCB%20Zone%20Check%20%E2%80%94%20Support">Email</a>
+                <a href="mailto:support@metaprodtrace.com?subject=Zone%20Inspect%20%E2%80%94%20Support">Email</a>
                 <a href="tg://join?invite=2IidgvAbT30wYTUy">Telegram</a>
                 <a href="/license" target="_blank">License</a>
             </div>
@@ -426,7 +426,7 @@
                         <p>Every uploaded photo goes through a multi-stage pipeline to find and analyze the matching
                             zone:</p>
 
-                        <p><strong>1. Global Alignment</strong> — the input image is aligned to the reference board
+                        <p><strong>1. Global Alignment</strong> — the input image is aligned to the reference
                             using <span class="kw">SIFT</span> feature matching (5000 keypoints) with FLANN matcher
                             and <span class="kw">RANSAC homography</span>. This warps the photo to overlap precisely
                             with the reference, compensating for camera angle, position, and scale.</p>
@@ -489,7 +489,7 @@
                         <h4>Interface Overview</h4>
                         <p>The system uses a 3-step wizard:</p>
                         <ul>
-                            <li><strong>Step 1 — Upload:</strong> upload a reference board photo or load a saved
+                            <li><strong>Step 1 — Upload:</strong> upload a reference photo or load a saved
                                 template.</li>
                             <li><strong>Step 2 — Zones:</strong> draw inspection zones on the reference image.</li>
                             <li><strong>Step 3 — Check:</strong> take zone photos, run analysis, review results.</li>
@@ -511,15 +511,15 @@
                 <div class="section" data-search>
                     <div class="section-hdr" onclick="toggleSection(this)">
                         <span class="section-num">2</span>
-                        <span class="section-title">Uploading a Reference Board</span>
+                        <span class="section-title">Uploading a Reference Image</span>
                         <span class="section-arrow">&#9654;</span>
                     </div>
                     <div class="section-body">
                         <h4>Single Image</h4>
-                        <p>Drag and drop (or click to browse) a single photo of the reference PCB into the upload area.
+                        <p>Drag and drop (or click to browse) a single photo of the reference assembly into the upload area.
                             Supported formats: PNG, JPG, JPEG, BMP, WebP.</p>
                         <h4>Multi-Image Blending</h4>
-                        <p>Upload 2+ photos of the same board. The system shows a blending panel:</p>
+                        <p>Upload 2+ photos of the same object. The system shows a blending panel:</p>
                         <ul>
                             <li><strong>Manual blend:</strong> adjust X/Y offset and Scale sliders for each image. Click
                                 "Blend (manual)" to merge.</li>
@@ -611,7 +611,7 @@
                     </div>
                     <div class="section-body">
                         <h4>Serial Number Scanning</h4>
-                        <p>Before checking zones, scan a barcode / QR code / DataMatrix for the board serial number.
+                        <p>Before checking zones, scan a barcode / QR code / DataMatrix for the serial number.
                             Upload a photo from desktop or use the mobile camera. The zone check area is locked until a
                             serial is scanned. The decoded value appears with its type (e.g. QR_CODE, CODE_128).</p>
                         <h4>Taking Zone Photos (Desktop)</h4>
@@ -805,7 +805,7 @@
                         <h4>Progress Bar</h4>
                         <p>Shows "N/M zones checked" with a percentage fill bar.</p>
                         <h4>Reference Mini-Map</h4>
-                        <p>Small canvas showing the full reference board with zone overlays. Unchecked zones pulsate;
+                        <p>Small canvas showing the full reference image with zone overlays. Unchecked zones pulsate;
                             checked zones show their status color and a check/warn/defect marker.</p>
                         <h4>Completion Banner</h4>
                         <p>When all zones are checked: "ALL ZONES OK" (green) or "ISSUES FOUND" (yellow). Shows serial
@@ -1088,7 +1088,7 @@ curl -s "$HOST/api/v1/results"
                         <h4>Обзор интерфейса</h4>
                         <p>Система работает в 3 шага:</p>
                         <ul>
-                            <li><strong>Шаг 1 — Загрузка:</strong> загрузка эталонного фото платы или выбор сохранённого
+                            <li><strong>Шаг 1 — Загрузка:</strong> загрузка эталонного фото или выбор сохранённого
                                 шаблона.</li>
                             <li><strong>Шаг 2 — Зоны:</strong> рисование зон инспекции на эталонном изображении.</li>
                             <li><strong>Шаг 3 — Проверка:</strong> фотографирование зон, анализ, просмотр результатов.
@@ -1112,15 +1112,15 @@ curl -s "$HOST/api/v1/results"
                 <div class="section" data-search>
                     <div class="section-hdr" onclick="toggleSection(this)">
                         <span class="section-num">2</span>
-                        <span class="section-title">Загрузка эталона платы</span>
+                        <span class="section-title">Загрузка эталона</span>
                         <span class="section-arrow">&#9654;</span>
                     </div>
                     <div class="section-body">
                         <h4>Одно изображение</h4>
-                        <p>Перетащите (или выберите через диалог) одно фото эталонной платы в область загрузки. Форматы:
+                        <p>Перетащите (или выберите через диалог) одно фото эталона в область загрузки. Форматы:
                             PNG, JPG, JPEG, BMP, WebP.</p>
                         <h4>Блендинг нескольких фото</h4>
-                        <p>Загрузите 2+ фото одной и той же платы. Система покажет панель блендинга:</p>
+                        <p>Загрузите 2+ фото одного и того же объекта. Система покажет панель блендинга:</p>
                         <ul>
                             <li><strong>Ручной блендинг:</strong> ползунки X/Y смещение и масштаб для каждого
                                 изображения. Нажмите "Blend (manual)".</li>
@@ -1189,7 +1189,7 @@ curl -s "$HOST/api/v1/results"
                         </ul>
                         <h4>Якорные точки (Anchors)</h4>
                         <p>Нажмите значок прицела на чипе зоны. Поставьте до 2 якорных точек на изображении. При съёмке
-                            с мобильного камера покажет ориентиры для выравнивания платы.</p>
+                            с мобильного камера покажет ориентиры для выравнивания объекта.</p>
                         <h4>Подзоны (Subzones)</h4>
                         <p>Нажмите значок квадрата на чипе. Нарисуйте до 10 прямоугольников внутри зоны. Подзоны
                             анализируются отдельно с более строгими порогами. У каждой подзоны свой статус, % дефектов и
@@ -1210,7 +1210,7 @@ curl -s "$HOST/api/v1/results"
                     </div>
                     <div class="section-body">
                         <h4>Сканирование серийного номера</h4>
-                        <p>Перед проверкой зон отсканируйте штрихкод / QR-код / DataMatrix для идентификации платы.
+                        <p>Перед проверкой зон отсканируйте штрихкод / QR-код / DataMatrix для идентификации объекта.
                             Загрузите фото с ПК или используйте мобильную камеру. Проверка зон заблокирована до
                             сканирования. Распознанное значение отображается с типом кода (QR_CODE, CODE_128 и т.д.).
                         </p>
@@ -1281,14 +1281,14 @@ curl -s "$HOST/api/v1/results"
                         <h4>Авто-принятие</h4>
                         <p>Переключатель "auto" рядом с прогресс-баром. Когда все зоны <span class="tag-ok">OK</span> и
                             авто-принятие включено — результат автоматически сохраняется и через 3 секунды начинается
-                            новая плата.</p>
+                            новый объект.</p>
                         <h4>Закрыть и сохранить</h4>
-                        <p>"Close & Save" — сохраняет инспекцию (полную или частичную) и сбрасывает для следующей платы.
+                        <p>"Close & Save" — сохраняет инспекцию (полную или частичную) и сбрасывает для следующего объекта.
                         </p>
-                        <h4>Пропустить плату</h4>
-                        <p>Отменить текущую плату без сохранения. Сессия сбрасывается.</p>
+                        <h4>Пропустить объект</h4>
+                        <p>Отменить текущий объект без сохранения. Сессия сбрасывается.</p>
                         <h4>Перепроверить дефектные</h4>
-                        <p>Очищает только не-ОК зоны для повторной съёмки без сброса всей платы.</p>
+                        <p>Очищает только не-ОК зоны для повторной съёмки без сброса всей инспекции.</p>
                     </div>
                 </div>
 
@@ -1319,7 +1319,7 @@ curl -s "$HOST/api/v1/results"
                             из галереи.</p>
                         <h4>Действия с мобильного</h4>
                         <ul>
-                            <li><strong>Skip -> New SN:</strong> сохранить текущий результат и начать новую плату.</li>
+                            <li><strong>Skip -> New SN:</strong> сохранить текущий результат и начать новый объект.</li>
                             <li><strong>Retry Failed:</strong> пересканировать только дефектные зоны.</li>
                         </ul>
                         <p>Мобильная страница опрашивает сервер каждые 5 секунд для синхронизации состояния с десктопом.
@@ -1406,7 +1406,7 @@ curl -s "$HOST/api/v1/results"
                         <h4>Прогресс-бар</h4>
                         <p>Показывает "N/M зон проверено" с процентным заполнением.</p>
                         <h4>Мини-карта эталона</h4>
-                        <p>Маленький холст с полным видом эталонной платы и наложением зон. Непроверенные зоны
+                        <p>Маленький холст с полным видом эталона и наложением зон. Непроверенные зоны
                             пульсируют; проверенные показывают статусный цвет и маркер.</p>
                         <h4>Баннер завершения</h4>
                         <p>При проверке всех зон: "ALL ZONES OK" (зелёный) или "ISSUES FOUND" (жёлтый). Показывает

@@ -2624,7 +2624,7 @@
                     </div>` : ''}
 
                     <div class="pp-footer">
-                        <span>PCB Inspect — Quality Control</span>
+                        <span>Zone Inspect — Quality Control</span>
                         <span>${new Date().toISOString().slice(0, 19).replace('T', ' ')}</span>
                     </div>`;
 

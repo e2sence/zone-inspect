@@ -1,4 +1,4 @@
-"""API endpoint tests for PCB Zone Check."""
+"""API endpoint tests for Zone Inspect."""
 
 import io
 import time
