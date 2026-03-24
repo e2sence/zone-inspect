@@ -33,8 +33,10 @@ trap cleanup EXIT
 CODE_FILES=(
     app.py nn_engine.py auto_blend.py r2_storage.py inspection_config.py
     gunicorn.conf.py _check_cfg.py
-    static/app.js static/style.css static/tpl-editor.js
+    static/app.js static/style.css static/tpl-editor.js static/jbmono.css
+    static/chart.umd.min.js
     templates/index.html templates/login.html templates/mobile_camera.html
+    templates/doc.html
 )
 
 # Rsync excludes — secrets and runtime data stay on each machine
