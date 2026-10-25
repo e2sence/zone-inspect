@@ -510,7 +510,8 @@ def _try_template_match(zone_crop, photo):
 def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
                        extract_nn_score: float = 0.0,
                        strict: bool = False,
-                       zone_feats=None, extracted_feats=None) -> dict:
+                       zone_feats=None, extracted_feats=None,
+                       thr=None) -> dict:
     """
     Детекция дефектов через patch-based CNN comparison.
 
@@ -524,29 +525,31 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
       If provided, skips the corresponding forward pass (saves ~50-150ms each).
 
     strict=True: подзоны — жёсткие пороги из SUBZONE_* в inspection_config.py.
+    thr: снимок порогов из cfg.thresholds() (чувствительность запроса).
     """
     m = _model()
+    th = thr if thr is not None else cfg.thresholds()
 
     # Thresholds: обычные vs строгие (подзоны)
-    patch_sim_thr = cfg.SUBZONE_PATCH_SIM_THRESHOLD if strict else cfg.PATCH_SIM_THRESHOLD
-    patch_def_w = cfg.SUBZONE_PATCH_DEFECT_WEIGHT if strict else cfg.PATCH_DEFECT_WEIGHT
-    ok_thr = cfg.SUBZONE_VERDICT_OK_THRESHOLD if strict else cfg.VERDICT_OK_THRESHOLD
-    warn_thr = cfg.SUBZONE_VERDICT_WARN_THRESHOLD if strict else cfg.VERDICT_WARN_THRESHOLD
-    safety_ssim = cfg.SUBZONE_SAFETY_SSIM_LOW if strict else cfg.SAFETY_SSIM_LOW
-    safety_sim = cfg.SUBZONE_SAFETY_SIM_LOW if strict else cfg.SAFETY_SIM_LOW
+    patch_sim_thr = th.SUBZONE_PATCH_SIM_THRESHOLD if strict else th.PATCH_SIM_THRESHOLD
+    patch_def_w = th.SUBZONE_PATCH_DEFECT_WEIGHT if strict else th.PATCH_DEFECT_WEIGHT
+    ok_thr = th.SUBZONE_VERDICT_OK_THRESHOLD if strict else th.VERDICT_OK_THRESHOLD
+    warn_thr = th.SUBZONE_VERDICT_WARN_THRESHOLD if strict else th.VERDICT_WARN_THRESHOLD
+    safety_ssim = th.SUBZONE_SAFETY_SSIM_LOW if strict else th.SAFETY_SSIM_LOW
+    safety_sim = th.SUBZONE_SAFETY_SIM_LOW if strict else th.SAFETY_SIM_LOW
 
     # ─── Предобработка ────────────────────────────────────────────────────
     z_lab = cv2.cvtColor(zone_crop, cv2.COLOR_BGR2LAB)
     e_lab = cv2.cvtColor(extracted, cv2.COLOR_BGR2LAB)
-    clahe_pre = cv2.createCLAHE(clipLimit=cfg.CLAHE_CLIP_LIMIT,
-                                tileGridSize=cfg.CLAHE_TILE_SIZE)
+    clahe_pre = cv2.createCLAHE(clipLimit=th.CLAHE_CLIP_LIMIT,
+                                tileGridSize=th.CLAHE_TILE_SIZE)
     z_lab[:, :, 0] = clahe_pre.apply(z_lab[:, :, 0])
     e_lab[:, :, 0] = clahe_pre.apply(e_lab[:, :, 0])
     z_norm = cv2.cvtColor(z_lab, cv2.COLOR_LAB2BGR)
     e_norm = cv2.cvtColor(e_lab, cv2.COLOR_LAB2BGR)
 
-    z_blur = cv2.GaussianBlur(z_norm, cfg.PRE_BLUR_KERNEL, 0)
-    e_blur = cv2.GaussianBlur(e_norm, cfg.PRE_BLUR_KERNEL, 0)
+    z_blur = cv2.GaussianBlur(z_norm, th.PRE_BLUR_KERNEL, 0)
+    e_blur = cv2.GaussianBlur(e_norm, th.PRE_BLUR_KERNEL, 0)
 
     # Use cached features or compute fresh
     if zone_feats is not None:
@@ -572,14 +575,14 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
         cv2.resize(zone_crop, sz), cv2.COLOR_BGR2GRAY))
     b_g = clahe_pre.apply(cv2.cvtColor(
         cv2.resize(extracted, sz), cv2.COLOR_BGR2GRAY))
-    a_g = cv2.GaussianBlur(a_g, cfg.SSIM_BLUR_KERNEL, 0)
-    b_g = cv2.GaussianBlur(b_g, cfg.SSIM_BLUR_KERNEL, 0)
+    a_g = cv2.GaussianBlur(a_g, th.SSIM_BLUR_KERNEL, 0)
+    b_g = cv2.GaussianBlur(b_g, th.SSIM_BLUR_KERNEL, 0)
     ssim_val = float(ssim_func(a_g, b_g, data_range=255))
 
     # ─── 3. Patch-based CNN similarity map ────────────────────────────────
     # Сравниваем feature maps на уровне патчей (каждая позиция = ~32x32 px)
-    z_feat = z_feats[cfg.PATCH_LAYER]
-    e_feat = e_feats[cfg.PATCH_LAYER]
+    z_feat = z_feats[th.PATCH_LAYER]
+    e_feat = e_feats[th.PATCH_LAYER]
     z_fn = F.normalize(z_feat, dim=1)
     e_fn = F.normalize(e_feat, dim=1)
     # Cosine similarity на каждой пространственной позиции
@@ -641,22 +644,22 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
 
         # 3) Комбинированный скор подзоны
         #    Если гистограмма или SSIM или global_sim очень низкие → defect
-        if hist_corr < cfg.SUBZONE_HIST_COMPLETELY_DIFF or (
-                ssim_val < cfg.SUBZONE_SSIM_COMPLETELY_DIFF
-                and global_sim < cfg.SUBZONE_SIM_COMPLETELY_DIFF):
+        if hist_corr < th.SUBZONE_HIST_COMPLETELY_DIFF or (
+                ssim_val < th.SUBZONE_SSIM_COMPLETELY_DIFF
+                and global_sim < th.SUBZONE_SIM_COMPLETELY_DIFF):
             # Совершенно разные изображения
-            defect_pct = max(raw_defect, cfg.SUBZONE_FORCED_DEFECT_PCT)
-        elif hist_corr < cfg.SUBZONE_HIST_SIGNIFICANT_DIFF or (
-                ssim_val < cfg.SUBZONE_SSIM_SIGNIFICANT_DIFF
-                and global_sim < cfg.SUBZONE_SIM_SIGNIFICANT_DIFF):
+            defect_pct = max(raw_defect, th.SUBZONE_FORCED_DEFECT_PCT)
+        elif hist_corr < th.SUBZONE_HIST_SIGNIFICANT_DIFF or (
+                ssim_val < th.SUBZONE_SSIM_SIGNIFICANT_DIFF
+                and global_sim < th.SUBZONE_SIM_SIGNIFICANT_DIFF):
             # Значительные различия — минимальный дисконт
-            defect_pct = round(raw_defect * cfg.SUBZONE_DISCOUNT_MINIMAL, 2)
-        elif best_global >= cfg.GLOBAL_SIM_OK:
-            defect_pct = round(raw_defect * cfg.SUBZONE_DISCOUNT_GOOD, 2)
-        elif best_global >= cfg.GLOBAL_SIM_WARN:
-            t = (best_global - cfg.GLOBAL_SIM_WARN) / \
-                max(cfg.GLOBAL_SIM_OK - cfg.GLOBAL_SIM_WARN, 0.01)
-            discount = 1.0 - t * (1.0 - cfg.SUBZONE_DISCOUNT_GOOD)
+            defect_pct = round(raw_defect * th.SUBZONE_DISCOUNT_MINIMAL, 2)
+        elif best_global >= th.GLOBAL_SIM_OK:
+            defect_pct = round(raw_defect * th.SUBZONE_DISCOUNT_GOOD, 2)
+        elif best_global >= th.GLOBAL_SIM_WARN:
+            t = (best_global - th.GLOBAL_SIM_WARN) / \
+                max(th.GLOBAL_SIM_OK - th.GLOBAL_SIM_WARN, 0.01)
+            discount = 1.0 - t * (1.0 - th.SUBZONE_DISCOUNT_GOOD)
             defect_pct = round(raw_defect * discount, 2)
         else:
             defect_pct = round(raw_defect, 2)
@@ -665,12 +668,12 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
         best_global = max(global_sim, extract_nn_score)
 
         ssim_cutoff = getattr(cfg, 'SSIM_DISCOUNT_CUTOFF', 0.42)
-        if best_global >= cfg.GLOBAL_SIM_OK:
-            defect_pct = round(raw_defect * cfg.PATCH_HIGH_SIM_DISCOUNT, 2)
-        elif best_global >= cfg.GLOBAL_SIM_WARN:
-            t = (best_global - cfg.GLOBAL_SIM_WARN) / \
-                max(cfg.GLOBAL_SIM_OK - cfg.GLOBAL_SIM_WARN, 0.01)
-            discount = 1.0 - t * (1.0 - cfg.PATCH_HIGH_SIM_DISCOUNT)
+        if best_global >= th.GLOBAL_SIM_OK:
+            defect_pct = round(raw_defect * th.PATCH_HIGH_SIM_DISCOUNT, 2)
+        elif best_global >= th.GLOBAL_SIM_WARN:
+            t = (best_global - th.GLOBAL_SIM_WARN) / \
+                max(th.GLOBAL_SIM_OK - th.GLOBAL_SIM_WARN, 0.01)
+            discount = 1.0 - t * (1.0 - th.PATCH_HIGH_SIM_DISCOUNT)
             defect_pct = round(raw_defect * discount, 2)
         elif ssim_val < ssim_cutoff:
             defect_pct = round(raw_defect * 0.85, 2)
@@ -707,7 +710,7 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
     if defect_pct < ok_thr:
         # Safety net: если и global_sim и SSIM очень низкие — не верим OK
         if ssim_val < safety_ssim and global_sim < safety_sim:
-            defect_pct = max(defect_pct, cfg.SAFETY_DEFECT_OVERRIDE_PCT)
+            defect_pct = max(defect_pct, th.SAFETY_DEFECT_OVERRIDE_PCT)
             # verdict = "Дефект ❌ — структурные различия (низкий SSIM/similarity)"
             verdict = "Defect ❌ — structural differences (low SSIM/similarity)"
             status = "defect"

@@ -9,6 +9,7 @@
 
 # ─── Предварительная обработка ────────────────────────────────────────────
 import sys as _sys
+from types import SimpleNamespace
 CLAHE_CLIP_LIMIT = 2.0          # clipLimit для CLAHE выравнивания яркости
 CLAHE_TILE_SIZE = (8, 8)        # размер тайлов CLAHE
 PRE_BLUR_KERNEL = (7, 7)        # GaussianBlur перед извлечением фич
@@ -88,37 +89,67 @@ SUBZONE_DISCOUNT_GOOD = round(0.25 + _S * 0.20, 3)
 # ─── Пересчёт порогов на лету ────────────────────────────────────────────
 
 
-def apply_zone_sensitivity(val: float):
-    """Пересчитать пороги общих зон из единого значения чувствительности."""
+def _zone_values(val: float) -> dict:
+    """Пороги общих зон, рассчитанные из единого значения чувствительности."""
     val = max(0.0, min(2.0, val))
+    return {
+        "ZONE_SENSITIVITY": val,
+        "PATCH_SIM_THRESHOLD": round(min(0.42 + val * 0.20, 0.85), 3),
+        "PATCH_DEFECT_WEIGHT": round(25.0 + val * 20.0, 3),
+        "PATCH_HIGH_SIM_DISCOUNT": round(min(0.20 + val * 0.40, 1.0), 3),
+        "VERDICT_OK_THRESHOLD": round(max(12.0 - val * 8.0, 0.5), 3),
+        "VERDICT_WARN_THRESHOLD": round(max(25.0 - val * 14.0, 1.5), 3),
+        "SAFETY_SSIM_LOW": round(min(0.20 + val * 0.10, 0.45), 3),
+        "SAFETY_SIM_LOW": round(min(0.30 + val * 0.10, 0.55), 3),
+    }
+
+
+def _subzone_values(val: float) -> dict:
+    """Пороги подзон, рассчитанные из единого значения чувствительности."""
+    val = max(0.0, min(2.0, val))
+    return {
+        "SUBZONE_SENSITIVITY": val,
+        "SUBZONE_PATCH_SIM_THRESHOLD": round(min(0.42 + val * 0.16, 0.78), 3),
+        "SUBZONE_VERDICT_OK_THRESHOLD": round(max(12.0 - val * 8.0, 0.5), 3),
+        "SUBZONE_VERDICT_WARN_THRESHOLD": round(max(25.0 - val * 12.0, 1.5), 3),
+        "SUBZONE_PATCH_DEFECT_WEIGHT": round(22.0 + val * 18.0, 3),
+        "SUBZONE_SAFETY_SSIM_LOW": round(min(0.15 + val * 0.15, 0.50), 3),
+        "SUBZONE_SAFETY_SIM_LOW": round(min(0.25 + val * 0.15, 0.60), 3),
+        "SUBZONE_HIST_COMPLETELY_DIFF": round(min(0.10 + val * 0.12, 0.40), 3),
+        "SUBZONE_HIST_SIGNIFICANT_DIFF": round(min(0.20 + val * 0.12, 0.50), 3),
+        "SUBZONE_SSIM_COMPLETELY_DIFF": round(min(0.10 + val * 0.10, 0.35), 3),
+        "SUBZONE_SIM_COMPLETELY_DIFF": round(min(0.30 + val * 0.10, 0.55), 3),
+        "SUBZONE_SSIM_SIGNIFICANT_DIFF": round(min(0.15 + val * 0.10, 0.40), 3),
+        "SUBZONE_SIM_SIGNIFICANT_DIFF": round(min(0.35 + val * 0.10, 0.60), 3),
+        "SUBZONE_FORCED_DEFECT_PCT": round(min(20.0 + val * 20.0, 65.0), 3),
+        "SUBZONE_DISCOUNT_MINIMAL": round(min(0.65 + val * 0.20, 1.0), 3),
+        "SUBZONE_DISCOUNT_GOOD": round(min(0.25 + val * 0.20, 0.70), 3),
+    }
+
+
+def thresholds(zone_sens: float | None = None,
+               subzone_sens: float | None = None) -> SimpleNamespace:
+    """Снимок всех порогов для одного запроса.
+
+    Ничего не меняет в модуле — безопасно при параллельных запросах
+    с разной чувствительностью (gunicorn threads).
+    None = значение по умолчанию из этого файла.
+    """
     m = _sys.modules[__name__]
-    m.ZONE_SENSITIVITY = val
-    m.PATCH_SIM_THRESHOLD = round(min(0.42 + val * 0.20, 0.85), 3)
-    m.PATCH_DEFECT_WEIGHT = round(25.0 + val * 20.0, 3)
-    m.PATCH_HIGH_SIM_DISCOUNT = round(min(0.20 + val * 0.40, 1.0), 3)
-    m.VERDICT_OK_THRESHOLD = round(max(12.0 - val * 8.0, 0.5), 3)
-    m.VERDICT_WARN_THRESHOLD = round(max(25.0 - val * 14.0, 1.5), 3)
-    m.SAFETY_SSIM_LOW = round(min(0.20 + val * 0.10, 0.45), 3)
-    m.SAFETY_SIM_LOW = round(min(0.30 + val * 0.10, 0.55), 3)
+    vals = {k: v for k, v in vars(m).items() if k.isupper()}
+    if zone_sens is not None:
+        vals.update(_zone_values(zone_sens))
+    if subzone_sens is not None:
+        vals.update(_subzone_values(subzone_sens))
+    return SimpleNamespace(**vals)
+
+
+def apply_zone_sensitivity(val: float):
+    """Изменить пороги по умолчанию (глобально). Не вызывать из запросов —
+    для запросов используйте thresholds()."""
+    vars(_sys.modules[__name__]).update(_zone_values(val))
 
 
 def apply_subzone_sensitivity(val: float):
-    """Пересчитать пороги подзон из единого значения чувствительности."""
-    val = max(0.0, min(2.0, val))
-    m = _sys.modules[__name__]
-    m.SUBZONE_SENSITIVITY = val
-    m.SUBZONE_PATCH_SIM_THRESHOLD = round(min(0.42 + val * 0.16, 0.78), 3)
-    m.SUBZONE_VERDICT_OK_THRESHOLD = round(max(12.0 - val * 8.0, 0.5), 3)
-    m.SUBZONE_VERDICT_WARN_THRESHOLD = round(max(25.0 - val * 12.0, 1.5), 3)
-    m.SUBZONE_PATCH_DEFECT_WEIGHT = round(22.0 + val * 18.0, 3)
-    m.SUBZONE_SAFETY_SSIM_LOW = round(min(0.15 + val * 0.15, 0.50), 3)
-    m.SUBZONE_SAFETY_SIM_LOW = round(min(0.25 + val * 0.15, 0.60), 3)
-    m.SUBZONE_HIST_COMPLETELY_DIFF = round(min(0.10 + val * 0.12, 0.40), 3)
-    m.SUBZONE_HIST_SIGNIFICANT_DIFF = round(min(0.20 + val * 0.12, 0.50), 3)
-    m.SUBZONE_SSIM_COMPLETELY_DIFF = round(min(0.10 + val * 0.10, 0.35), 3)
-    m.SUBZONE_SIM_COMPLETELY_DIFF = round(min(0.30 + val * 0.10, 0.55), 3)
-    m.SUBZONE_SSIM_SIGNIFICANT_DIFF = round(min(0.15 + val * 0.10, 0.40), 3)
-    m.SUBZONE_SIM_SIGNIFICANT_DIFF = round(min(0.35 + val * 0.10, 0.60), 3)
-    m.SUBZONE_FORCED_DEFECT_PCT = round(min(20.0 + val * 20.0, 65.0), 3)
-    m.SUBZONE_DISCOUNT_MINIMAL = round(min(0.65 + val * 0.20, 1.0), 3)
-    m.SUBZONE_DISCOUNT_GOOD = round(min(0.25 + val * 0.20, 0.70), 3)
+    """Изменить пороги подзон по умолчанию (глобально). См. thresholds()."""
+    vars(_sys.modules[__name__]).update(_subzone_values(val))

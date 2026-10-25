@@ -1131,7 +1131,10 @@
 
         /* ─── Serial number detection ─── */
         let currentSerial = null;
+        // Token is per station (browser): reused across sessions so the paired
+        // phone keeps working after a template switch or page reload.
         let mobileToken = null;
+        try { mobileToken = localStorage.getItem('zi_mobile_token'); } catch (e) { }
         let mobilePollTimer = null;
 
         function unlockZoneCheck() {
@@ -1144,10 +1147,15 @@
         async function generateMobileQR() {
             if (!sessionId) return;
             try {
-                const r = await fetch(`/api/session/${sessionId}/mobile_qr`, { method: 'POST' });
+                const r = await fetch(`/api/session/${sessionId}/mobile_qr`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prev_token: mobileToken }),
+                });
                 const d = await r.json();
                 if (d.error) return;
                 mobileToken = d.token;
+                try { localStorage.setItem('zi_mobile_token', mobileToken); } catch (e) { }
 
                 const qrImg = document.getElementById('qr-image');
                 qrImg.src = 'data:image/png;base64,' + d.qr_b64;

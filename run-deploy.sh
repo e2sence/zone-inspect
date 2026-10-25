@@ -32,7 +32,7 @@ trap cleanup EXIT
 # Files to compare (code only, not secrets/data)
 CODE_FILES=(
     app.py nn_engine.py auto_blend.py r2_storage.py inspection_config.py
-    gunicorn.conf.py _check_cfg.py
+    gunicorn.conf.py
     static/app.js static/style.css static/tpl-editor.js static/jbmono.css
     static/chart.umd.min.js
     templates/index.html templates/login.html templates/mobile_camera.html
@@ -44,7 +44,8 @@ RSYNC_EXCLUDES=(
     --exclude='venv/' --exclude='.venv/' --exclude='__pycache__/'
     --exclude='*.pyc' --exclude='.git/'
     --exclude='r2_config.json' --exclude='bot_config.json' --exclude='auth_keys.json'
-    --exclude='.env' --exclude='.mobile_tokens.json'
+    --exclude='.env' --exclude='.mobile_tokens.json' --exclude='.mobile_tokens.tmp'
+    --exclude='gunicorn.ctl' --exclude='.pytest_cache/'
     --exclude='uploads/' --exclude='results/' --exclude='inspection_results/'
     --exclude='saved_templates/' --exclude='references/'
     --exclude='*.pt' --exclude='nohup.out' --exclude='*.log'

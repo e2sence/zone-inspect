@@ -44,11 +44,70 @@ _TEST_AUTH_KEYS = {
 }
 
 
+# In-memory stand-in for r2_storage (key → bytes)
+FAKE_R2: dict[str, bytes] = {}
+
+
+def _install_fake_r2():
+    import r2_storage as r2
+
+    def upload_bytes(key, data, content_type="application/octet-stream"):
+        FAKE_R2[key] = bytes(data)
+
+    def upload_json(key, obj):
+        FAKE_R2[key] = json.dumps(obj).encode()
+
+    def download_bytes(key):
+        return FAKE_R2.get(key)
+
+    def download_json(key):
+        data = FAKE_R2.get(key)
+        return json.loads(data) if data is not None else None
+
+    def append_line(key, line):
+        FAKE_R2[key] = FAKE_R2.get(key, b"") + (line + "\n").encode()
+
+    def list_keys(prefix, max_keys=10000):
+        return [k for k in FAKE_R2 if k.startswith(prefix)][:max_keys]
+
+    def delete_key(key):
+        FAKE_R2.pop(key, None)
+
+    def delete_prefix(prefix):
+        keys = list_keys(prefix)
+        for k in keys:
+            del FAKE_R2[k]
+        return len(keys)
+
+    def key_exists(key):
+        return key in FAKE_R2
+
+    for name, fn in list(locals().items()):
+        if callable(fn):
+            setattr(r2, name, fn)
+
+
+class _SyncPool:
+    """Runs 'background' R2 uploads inline so tests can assert on them."""
+
+    def submit(self, fn, *args, **kwargs):
+        fn(*args, **kwargs)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _patch_env(tmp_path_factory):
     """Set env vars BEFORE app is imported so no real DB / R2 is touched."""
     os.environ["FLASK_SECRET"] = "test-secret-key"
-    os.environ.pop("MONGODB_URI", None)
+    # Never the production DB: an empty value also stops app.py's
+    # load_dotenv() from pulling MONGODB_URI back in from .env.
+    # Opt in to Mongo tests with a dedicated database: TEST_MONGODB_URI=...
+    os.environ["MONGODB_URI"] = os.environ.get("TEST_MONGODB_URI", "")
+    # Dummy R2 credentials: r2_storage refuses to import without them.
+    # Every R2 call is replaced by the in-memory fake below, so tests can
+    # never touch a real bucket even if real credentials are present.
+    for var in ("R2_ACCOUNT_ID", "R2_BUCKET", "R2_ACCESS_KEY_ID",
+                "R2_SECRET_ACCESS_KEY"):
+        os.environ.setdefault(var, "test")
 
     # Write test auth_keys.json and point the module-level constant to it
     tmp = tmp_path_factory.mktemp("pcb_test")
@@ -57,6 +116,10 @@ def _patch_env(tmp_path_factory):
 
     import app as app_module
     app_module.AUTH_KEYS_PATH = Path(str(auth_file))
+    app_module._MOBILE_TOKENS_PATH = tmp / "mobile_tokens.json"
+    app_module._mobile_tokens.clear()
+    _install_fake_r2()
+    app_module._r2_pool = _SyncPool()
 
     yield
 

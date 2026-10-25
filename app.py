@@ -35,6 +35,10 @@ from auto_blend import auto_blend_images, detect_codes
 import r2_storage as r2
 
 # ─── MongoDB ──────────────────────────────────────────────────────────────────
+# MongoClient connects lazily and reconnects on its own, so availability is
+# decided by configuration, not by a one-shot check at startup: a transient
+# Atlas/network failure during boot must not leave the app without a DB until
+# the next restart. Requests made during an outage fail; later ones recover.
 try:
     from pymongo import MongoClient
     _MONGO_URI = _os.environ.get("MONGODB_URI", "")
@@ -42,18 +46,22 @@ try:
         _mongo = MongoClient(_MONGO_URI, serverSelectionTimeoutMS=5000)
         _mongo_db = _mongo.get_default_database()
         _results_col = _mongo_db["inspection_results"]
-        _results_col.create_index("timestamp", unique=False)
-        _results_col.create_index("result_id", unique=True)
         _templates_col = _mongo_db["templates"]
-        _templates_col.create_index("id", unique=True)
         MONGO_AVAILABLE = True
-        print(f"🍃 MongoDB: connected to {_mongo_db.name}")
+        try:
+            _results_col.create_index("timestamp", unique=False)
+            _results_col.create_index("result_id", unique=True)
+            _templates_col.create_index("id", unique=True)
+            print(f"🍃 MongoDB: connected to {_mongo_db.name}", flush=True)
+        except Exception as _e:
+            print(f"⚠️  MongoDB not reachable at startup ({_e}) — "
+                  "will keep retrying on each request", flush=True)
     else:
         MONGO_AVAILABLE = False
         print("⚠️  MONGODB_URI not set — results stored in R2 only")
-except Exception as _e:
+except ImportError:
     MONGO_AVAILABLE = False
-    print(f"⚠️  MongoDB unavailable ({_e}) — results stored in R2 only")
+    print("⚠️  pymongo not installed — results stored in R2 only")
 
 # ─── Neural Engine (optional, graceful fallback to OpenCV) ────────────────────
 try:
@@ -110,57 +118,58 @@ else:
 # session_id → { "ref_path": Path, "ref_img": ndarray, "zones": [...], "checked": {...} }
 sessions: dict[str, dict] = {}
 
-# mobile_token → session_id  (shared across gunicorn workers via file)
+# mobile_token → {"sid": session_id, "ts": last_bound}
+# Authoritative copy lives in memory (single gunicorn worker); the file only
+# lets phones survive a service restart without re-scanning the QR code.
 _MOBILE_TOKENS_PATH = BASE_DIR / ".mobile_tokens.json"
 _MOBILE_TOKENS_LOCK = threading.Lock()
+_MOBILE_TOKEN_TTL = 7 * 86400
 
 
-def _load_mobile_tokens() -> dict:
-    """Read tokens from shared file (called on every lookup for multi-worker sync)."""
-    if _MOBILE_TOKENS_PATH.exists():
-        try:
-            with open(_MOBILE_TOKENS_PATH) as f:
-                import fcntl
-                fcntl.flock(f, fcntl.LOCK_SH)
-                data = json.load(f)
-                fcntl.flock(f, fcntl.LOCK_UN)
-                return data
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {}
-
-
-def _save_mobile_tokens(tokens: dict):
-    """Write tokens to shared file with exclusive lock."""
+def _read_mobile_tokens_file() -> dict:
     try:
-        with open(_MOBILE_TOKENS_PATH, "w") as f:
-            import fcntl
-            fcntl.flock(f, fcntl.LOCK_EX)
-            json.dump(tokens, f)
-            fcntl.flock(f, fcntl.LOCK_UN)
+        with open(_MOBILE_TOKENS_PATH) as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    now = time.time()
+    tokens = {}
+    for t, v in raw.items():
+        if isinstance(v, str):  # legacy format: token → sid
+            v = {"sid": v, "ts": now}
+        if isinstance(v, dict) and v.get("sid"):
+            tokens[t] = v
+    return tokens
+
+
+_mobile_tokens: dict[str, dict] = _read_mobile_tokens_file()
+
+
+def _persist_mobile_tokens():
+    """Write tokens atomically (tmp + rename). Caller holds the lock."""
+    now = time.time()
+    for t in [t for t, v in _mobile_tokens.items()
+              if now - v.get("ts", 0) > _MOBILE_TOKEN_TTL]:
+        del _mobile_tokens[t]
+    tmp = _MOBILE_TOKENS_PATH.with_suffix(".tmp")
+    try:
+        with open(tmp, "w") as f:
+            json.dump(_mobile_tokens, f)
+        _os.replace(tmp, _MOBILE_TOKENS_PATH)
     except OSError:
         pass
 
 
 def _get_token_session(token: str) -> str | None:
-    """Get session_id for a mobile token (reads from shared file)."""
-    return _load_mobile_tokens().get(token)
+    """Get session_id for a mobile token."""
+    entry = _mobile_tokens.get(token)
+    return entry["sid"] if entry else None
 
 
-def _set_token_session(token: str, sid: str):
-    """Set or update a mobile token → session mapping."""
-    with _MOBILE_TOKENS_LOCK:
-        tokens = _load_mobile_tokens()
-        tokens[token] = sid
-        _save_mobile_tokens(tokens)
-
-
-def _remove_tokens_for_session(sid: str):
-    """Remove all mobile tokens pointing to a given session."""
-    with _MOBILE_TOKENS_LOCK:
-        tokens = _load_mobile_tokens()
-        tokens = {t: s for t, s in tokens.items() if s != sid}
-        _save_mobile_tokens(tokens)
+def _bind_token(token: str, sid: str):
+    """Point a mobile token at a session. Caller holds the lock."""
+    _mobile_tokens[token] = {"sid": sid, "ts": time.time()}
+    _persist_mobile_tokens()
 
 
 # session_id → list of uploaded photo blobs (bytes) from mobile
@@ -168,6 +177,8 @@ mobile_photos: dict[str, list[bytes]] = {}
 
 # Thread pool for background R2 uploads (non-blocking save)
 _r2_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="r2")
+# r2.append_line is download + append + upload: serialize to not lose lines
+_r2_append_lock = threading.Lock()
 
 # ─── Session TTL cleanup (60 min) ────────────────────────────────────────────
 SESSION_TTL = 1800  # seconds (30 min)
@@ -191,8 +202,8 @@ def _cleanup_sessions():
             sessions.pop(sid, None)
             # Clean mobile photos for this session
             mobile_photos.pop(sid, None)
-            # Remove mobile tokens pointing to this session
-            _remove_tokens_for_session(sid)
+            # Mobile tokens are kept (they expire by TTL): the desktop can
+            # rebind its token to a fresh session so the phone keeps working.
         if expired:
             gc.collect()
             if _malloc_trim:
@@ -227,11 +238,22 @@ AUTH_COOKIE = "pcb_auth_key"
 AUTH_COOKIE_MAX_AGE = 30 * 86400  # 30 days
 
 # ─── Brute-force protection ──────────────────────────────────────────────────
-_LOGIN_MAX_ATTEMPTS = 5       # per window
+# Keys are ~95-bit random strings, so this only throttles noise. Kept mild:
+# a factory floor often shares one public IP, and a lockout hits every station.
+_LOGIN_MAX_ATTEMPTS = 10      # per window
 _LOGIN_WINDOW = 60            # seconds
-_LOGIN_LOCKOUT = 300          # seconds after exceeding limit
+_LOGIN_LOCKOUT = 120          # seconds after exceeding limit
 _login_attempts: dict[str, list[float]] = {}  # ip -> [timestamps]
 _login_lockouts: dict[str, float] = {}        # ip -> lockout_until
+
+
+def _client_ip() -> str:
+    """Real client IP. Behind the local nginx, trust its X-Real-IP (nginx
+    resolves the Cloudflare CF-Connecting-IP via the realip module)."""
+    addr = request.remote_addr or "unknown"
+    if addr in ("127.0.0.1", "::1"):
+        return request.headers.get("X-Real-IP", addr)
+    return addr
 
 
 def _load_auth_keys() -> dict:
@@ -271,7 +293,7 @@ def _check_auth():
 
 # Routes that don't require auth
 _PUBLIC_PREFIXES = ("/login", "/static/", "/api/mobile/",
-                    "/mobile", "/doc", "/license",
+                    "/mobile", "/doc", "/license", "/healthz",
                     "/robots.txt", "/sitemap.xml")
 
 
@@ -358,7 +380,7 @@ def login_page():
 
 @app.route("/login", methods=["POST"])
 def login_submit():
-    ip = request.remote_addr or "unknown"
+    ip = _client_ip()
     now = time.time()
 
     # Check lockout
@@ -398,6 +420,25 @@ def logout():
     resp = redirect("/login")
     resp.delete_cookie(AUTH_COOKIE)
     return resp
+
+
+@app.route("/healthz")
+def healthz():
+    """Liveness + dependency check for external uptime monitoring.
+    503 when a configured dependency is down (e.g. MongoDB unreachable)."""
+    checks = {"nn": NN_AVAILABLE}
+    healthy = True
+    if _os.environ.get("MONGODB_URI"):
+        try:
+            _mongo.admin.command("ping")
+            checks["mongo"] = "ok"
+        except Exception:
+            checks["mongo"] = "down"
+            healthy = False
+    else:
+        checks["mongo"] = "not configured"
+    return jsonify({"status": "ok" if healthy else "degraded",
+                    **checks}), 200 if healthy else 503
 
 
 @app.route("/doc")
@@ -758,17 +799,20 @@ def _locate_and_extract(zone_crop: np.ndarray, photo: np.ndarray,
 def _analyze_defects(zone_crop: np.ndarray, extracted: np.ndarray,
                      extract_nn_score: float = 0.0,
                      strict: bool = False,
-                     zone_feats=None, extracted_feats=None) -> dict:
+                     zone_feats=None, extracted_feats=None,
+                     thr=None) -> dict:
     """
     Детекция дефектов: структурное сравнение при наличии neural engine,
     иначе classical (CLAHE + SSIM + edge diff).
     strict=True: подзоны — жёсткие пороги.
+    thr: снимок порогов inspection_config.thresholds() для этого запроса.
     """
     if NN_AVAILABLE:
         return analyze_defects_nn(zone_crop, extracted, extract_nn_score,
                                   strict=strict,
                                   zone_feats=zone_feats,
-                                  extracted_feats=extracted_feats)
+                                  extracted_feats=extracted_feats,
+                                  thr=thr)
 
     # ── OpenCV fallback ──────────────────────────────────────────────────
     size = (256, 256)
@@ -1067,6 +1111,8 @@ def _check_zone_impl(sid, photo_img=None):
         return jsonify({"error": "Zones not defined"}), 400
 
     # ─── Sensitivity overrides from frontend ──────────────────────────────
+    # Thresholds are computed per request (never written to the shared
+    # inspection_config module — requests run concurrently in threads).
     import inspection_config as _cfg
     zone_sens = None
     subzone_sens = None
@@ -1076,7 +1122,6 @@ def _check_zone_impl(sid, photo_img=None):
             "zone_sensitivity")
         if zs is not None:
             zone_sens = max(0.0, min(2.0, float(zs)))
-            _cfg.apply_zone_sensitivity(zone_sens)
     except (ValueError, TypeError):
         pass
     try:
@@ -1084,13 +1129,13 @@ def _check_zone_impl(sid, photo_img=None):
             "subzone_sensitivity")
         if ss is not None:
             subzone_sens = max(0.0, min(2.0, float(ss)))
-            _cfg.apply_subzone_sensitivity(subzone_sens)
     except (ValueError, TypeError):
         pass
     if zone_sens is None:
         zone_sens = _cfg.ZONE_SENSITIVITY
     if subzone_sens is None:
         subzone_sens = _cfg.SUBZONE_SENSITIVITY
+    thr = _cfg.thresholds(zone_sens, subzone_sens)
 
     if photo_img is not None:
         photo = photo_img
@@ -1245,15 +1290,13 @@ def _check_zone_impl(sid, photo_img=None):
             for pi, (szi, sz, sz_ref, sz_ext) in enumerate(sz_pairs):
                 # Per-subzone sensitivity override
                 _sz_sens = sz.get("sensitivity")
-                if _sz_sens is not None:
-                    _cfg.apply_subzone_sensitivity(_sz_sens)
+                sz_thr = (_cfg.thresholds(zone_sens, _sz_sens)
+                          if _sz_sens is not None else thr)
                 zf = all_feats[pi * 2]
                 ef = all_feats[pi * 2 + 1]
                 sz_defect = _analyze_defects(
                     sz_ref, sz_ext, best_score, strict=True,
-                    zone_feats=zf, extracted_feats=ef)
-                if _sz_sens is not None:
-                    _cfg.apply_subzone_sensitivity(subzone_sens)
+                    zone_feats=zf, extracted_feats=ef, thr=sz_thr)
                 subzone_results.append({
                     "index": szi,
                     "label": sz.get("label", f"Subzone {szi + 1}"),
@@ -1271,12 +1314,10 @@ def _check_zone_impl(sid, photo_img=None):
             for szi, sz, sz_ref, sz_ext in sz_pairs:
                 # Per-subzone sensitivity override
                 _sz_sens = sz.get("sensitivity")
-                if _sz_sens is not None:
-                    _cfg.apply_subzone_sensitivity(_sz_sens)
+                sz_thr = (_cfg.thresholds(zone_sens, _sz_sens)
+                          if _sz_sens is not None else thr)
                 sz_defect = _analyze_defects(sz_ref, sz_ext, best_score,
-                                             strict=True)
-                if _sz_sens is not None:
-                    _cfg.apply_subzone_sensitivity(subzone_sens)
+                                             strict=True, thr=sz_thr)
                 subzone_results.append({
                     "index": szi,
                     "label": sz.get("label", f"Subzone {szi + 1}"),
@@ -1291,7 +1332,8 @@ def _check_zone_impl(sid, photo_img=None):
                     "reference_b64": sz_defect["reference_b64"],
                 })
 
-        defect_info = _analyze_defects(best_crop, extracted, best_score)
+        defect_info = _analyze_defects(best_crop, extracted, best_score,
+                                       thr=thr)
 
         # Итоговый статус зоны = худший из (зона, подзоны)
         if subzone_results:
@@ -1430,7 +1472,9 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
     from datetime import datetime, timezone, timedelta
     _tz8 = timezone(timedelta(hours=8))
     ts = datetime.now(_tz8)
-    rid = sid[:8] + "_" + ts.strftime("%H%M%S")
+    # Date + random suffix: a long-lived session must never produce the same
+    # id twice (a repeat would overwrite an earlier board's record + images).
+    rid = f"{sid[:8]}_{ts:%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:4]}"
     prefix = f"results/{rid}/"
 
     record = {
@@ -1548,8 +1592,7 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
 
     # Save metadata: MongoDB (primary) with R2 fallback
     if MONGO_AVAILABLE:
-        _results_col.replace_one(
-            {"result_id": rid}, record, upsert=True)
+        _results_col.insert_one(dict(record))  # copy: insert_one adds _id
     else:
         r2.upload_json(prefix + "meta.json", record)
 
@@ -1562,12 +1605,13 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
     def _do_upload(path, data, ct):
         try:
             if ct is None:
-                r2.append_line(path, data.decode())
+                with _r2_append_lock:
+                    r2.append_line(path, data.decode())
             else:
                 r2.upload_bytes(path, data, ct)
         except Exception:
             import logging
-            logging.getLogger(__name__).warning("R2 upload failed: %s", path)
+            logging.getLogger(__name__).exception("R2 upload failed: %s", path)
     for u in _uploads:
         _r2_pool.submit(_do_upload, *u)
 
@@ -1619,7 +1663,9 @@ def update_result(sid):
     if not MONGO_AVAILABLE:
         return jsonify({"error": "MongoDB unavailable"}), 503
 
-    existing = _results_col.find_one({"result_id": rid})
+    q = {"result_id": rid}
+    q.update(_group_filter())
+    existing = _results_col.find_one(q)
     if not existing:
         return jsonify({"error": "Record not found"}), 404
 
@@ -1676,10 +1722,20 @@ def update_result(sid):
         elif eff == "warn" and overall == "ok":
             overall = "warn"
 
-    _results_col.update_one({"result_id": rid}, {"$set": {
-        "zones": zones,
-        "overall_status": overall,
-    }})
+    from datetime import datetime, timezone
+    _results_col.update_one({"result_id": rid}, {
+        "$set": {"zones": zones, "overall_status": overall},
+        "$push": {"decision_log": {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "by": getattr(request, "auth_user", ""),
+            "previous_overall": existing.get("overall_status"),
+            "overall": overall,
+            "user_decisions": {str(k): v for k, v in user_decisions.items()},
+            "user_sub_decisions": {
+                str(z): {str(k): v for k, v in subs.items()}
+                for z, subs in user_sub_decisions.items()},
+        }},
+    })
     return jsonify({"status": "ok", "overall": overall, "result_id": rid})
 
 
@@ -2227,48 +2283,6 @@ def restore_template_version(tid, ver):
     return jsonify({"status": "ok", "version": new_version})
 
 
-@app.route("/api/admin/migrate-templates", methods=["POST"])
-def migrate_templates_to_mongo():
-    """One-time migration: move template JSONs from R2 to MongoDB."""
-    if not MONGO_AVAILABLE:
-        return jsonify({"error": "MongoDB unavailable"}), 503
-
-    all_keys = r2.list_keys("templates/")
-    meta_keys = [k for k in all_keys if k.endswith("/meta.json")]
-    migrated = 0
-    skipped = 0
-
-    for mk in meta_keys:
-        meta = r2.download_json(mk)
-        if not meta:
-            continue
-        tid = meta.get("id")
-        if not tid:
-            continue
-
-        # Check if already in MongoDB
-        if _templates_col.find_one({"id": tid}):
-            skipped += 1
-            continue
-
-        # Collect version history from R2
-        prefix = _r2_tpl_prefix(tid)
-        ver_keys = [k for k in r2.list_keys(
-            prefix + "versions/") if k.endswith(".json")]
-        versions = []
-        for vk in sorted(ver_keys):
-            vm = r2.download_json(vk)
-            if vm:
-                versions.append(vm)
-
-        meta["versions"] = versions
-        meta.pop("_id", None)
-        _templates_col.insert_one(meta)
-        migrated += 1
-
-    return jsonify({"status": "ok", "migrated": migrated, "skipped": skipped})
-
-
 # ─── Mobile Camera ────────────────────────────────────────────────────────────
 
 @app.route("/api/session/<sid>/mobile_qr", methods=["POST"])
@@ -2277,26 +2291,25 @@ def generate_mobile_qr(sid):
     if sid not in sessions:
         return jsonify({"error": "Session not found"}), 404
 
-    # Generate a fresh token for each new session so the displayed URL changes,
-    # but keep old tokens alive (remapped) so mobile phones don't need to re-scan.
+    # Each desktop station owns its token. When the station starts a new
+    # session it sends its previous token back, and only that token is
+    # rebound — so its phone keeps working and other stations' phones are
+    # never redirected to this session.
+    data = request.get_json(silent=True) or {}
+    prev = data.get("prev_token")
     with _MOBILE_TOKENS_LOCK:
-        tokens = _load_mobile_tokens()
-        existing = next((t for t, s in tokens.items() if s == sid), None)
+        existing = next((t for t, v in _mobile_tokens.items()
+                         if v["sid"] == sid), None)
         if existing:
             token = existing
+        elif isinstance(prev, str) and prev in _mobile_tokens and (
+                _mobile_tokens[prev]["sid"] not in sessions
+                or sessions[_mobile_tokens[prev]["sid"]].get("operator")
+                == sessions[sid].get("operator")):
+            token = prev
         else:
-            # Remap old tokens to new session (backward compat for mobile)
-            for t in list(tokens):
-                if tokens[t] != sid:
-                    tokens[t] = sid
-            # Always generate a fresh token so the URL visually changes
             token = secrets.token_urlsafe(16)
-            tokens[token] = sid
-            # Cap at 5 tokens max — remove oldest (first inserted) ones
-            while len(tokens) > 5:
-                oldest = next(iter(tokens))
-                del tokens[oldest]
-            _save_mobile_tokens(tokens)
+        _bind_token(token, sid)
 
     if sid not in mobile_photos:
         mobile_photos[sid] = []
@@ -2591,53 +2604,13 @@ def pop_mobile_photo(sid):
     return _check_zone_impl(sid, photo_img=img)
 
 
-# ─── R2 Migration: upload existing local data ─────────────────────────────────
-
-@app.route("/api/r2/migrate", methods=["POST"])
-def r2_migrate():
-    """Upload all local templates and results to R2 (one-time migration)."""
-    uploaded = {"templates": 0, "results": 0, "logs": 0}
-
-    # Migrate templates
-    if TEMPLATE_DIR.exists():
-        for tpl_dir in TEMPLATE_DIR.iterdir():
-            if not tpl_dir.is_dir():
-                continue
-            tid = tpl_dir.name
-            prefix = f"templates/{tid}/"
-            for fp in tpl_dir.rglob("*"):
-                if not fp.is_file():
-                    continue
-                key = prefix + str(fp.relative_to(tpl_dir))
-                ct = "application/json" if fp.suffix == ".json" else "image/jpeg"
-                r2.upload_bytes(key, fp.read_bytes(), ct)
-                uploaded["templates"] += 1
-
-    # Migrate results
-    if RESULTS_DIR.exists():
-        for item in RESULTS_DIR.iterdir():
-            if item.is_dir():
-                rid = item.name
-                prefix = f"results/{rid}/"
-                for fp in item.rglob("*"):
-                    if not fp.is_file():
-                        continue
-                    key = prefix + str(fp.relative_to(item))
-                    ct = "application/json" if fp.suffix == ".json" else "image/jpeg"
-                    r2.upload_bytes(key, fp.read_bytes(), ct)
-                    uploaded["results"] += 1
-            elif item.suffix == ".jsonl":
-                # Migrate log files
-                key = f"logs/{item.name}"
-                r2.upload_bytes(key, item.read_bytes(), "text/plain")
-                uploaded["logs"] += 1
-
-    return jsonify({"status": "ok", "uploaded": uploaded})
-
+# ─── R2 diagnostics ───────────────────────────────────────────────────────
 
 @app.route("/api/r2/status")
 def r2_status():
-    """Check R2 connectivity and list object counts."""
+    """Check R2 connectivity and list object counts (admin only)."""
+    if getattr(request, "auth_role", "") != "admin":
+        return jsonify({"error": "Admin only"}), 403
     try:
         tpl_keys = r2.list_keys("templates/")
         res_keys = r2.list_keys("results/")
@@ -2648,8 +2621,9 @@ def r2_status():
             "results_objects": len(res_keys),
             "logs_objects": len(log_keys),
         })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    except Exception:
+        app.logger.exception("R2 status check failed")
+        return jsonify({"status": "error"}), 500
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
