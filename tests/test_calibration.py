@@ -131,6 +131,32 @@ def test_view_deviation_with_angled_reference():
         assert abs(Cm._angle(dirs[i], dirs[j]) - truth) < 1.0, (i, j, truth)
 
 
+def test_view_hint_arrow_leads_to_the_typical_viewpoint():
+    """Moving the phone the way the arrow points reduces the deviation."""
+    import calibration as Cm
+    ref_wh, ph_wh = (3024, 4032), (3000, 4000)
+    origin = np.zeros(3)
+    ref = _camera(np.array([0.0, -0.2, 0.45]), origin, ref_wh)            # reference at an angle
+    goods = [np.array([dx, dy, 0.4]) for dx, dy in ((0, 0), (0.02, 0.01), (-0.01, 0.02), (0.01, -0.02))]
+    poses = [Cm.view_poses(_homography(_camera(c, origin, ph_wh), ref), ph_wh, ref_wh) for c in goods]
+    normal = Cm.board_normal(poses)
+    point = (lambda p: p[:2] / p[2])(ref[0] @ (ref[1] @ origin + ref[2]))
+    zone = {"x": point[0] / ref_wh[0] - 0.01, "y": point[1] / ref_wh[1] - 0.01, "w": 0.02, "h": 0.02}
+    dirs = [Cm.view_direction(p, normal, ref_wh, Cm.zone_centre(zone, ref_wh)) for p in poses]
+    typical = np.mean(dirs, 0); typical /= np.linalg.norm(typical)
+    view = {"typical": typical.tolist(), "normal": normal.tolist()}
+
+    C = np.array([0.18, 0.05, 0.35])                                     # off to the side
+    for _ in range(6):
+        cam = _camera(C, origin, ph_wh)
+        dev, move = Cm.view_hint(_homography(cam, ref), ph_wh, ref_wh, zone, view)
+        step = cam[1].T @ np.array([move[0], move[1], 0.0])               # image direction → world
+        C2 = C + 0.03 * step
+        dev2, _ = Cm.view_hint(_homography(_camera(C2, origin, ph_wh), ref), ph_wh, ref_wh, zone, view)
+        assert dev2 < dev, (dev, dev2)
+        C = C2
+
+
 def test_suspect_samples():
     import calibration as C
     goods = [{"id": str(i)} for i in range(10)]

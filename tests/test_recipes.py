@@ -423,6 +423,31 @@ class TestCalibration:
         st = _calibrate(authed_client, tid)
         assert abs(st["calibration"]["zones"][0]["margin"] - 1.4) < 0.01
 
+    def test_live_viewpoint_hints(self, mongo, nn, authed_client, client, board, monkeypatch):
+        import app as app_module
+        monkeypatch.setattr(app_module, "GUIDE_SPACING", 0.0)       # no server-wide pacing here
+        tid = _ready_recipe(authed_client, board)
+        photo = shoot(board, ZONE, quality=88)
+        # lead's phone while collecting samples: typical viewpoint from the good samples
+        token = authed_client.post(f"/api/recipes/{tid}/sample_qr").get_json()["token"]
+        d = client.post(f"/api/mobile/{token}/sample_guide",
+                        data={"photo": (io.BytesIO(photo), "f.jpg")}, content_type="multipart/form-data").get_json()
+        assert d["aligned"] and d["zones"][0]["in_frame"]
+        assert isinstance(d["zones"][0]["view_dev"], float) and len(d["zones"][0]["move"]) == 2
+        # operator's phone: typical viewpoint from the published calibration
+        assert authed_client.post(f"/api/recipes/{tid}/publish").status_code == 200
+        sid = authed_client.get(f"/api/templates/{tid}").get_json()["session_id"]
+        token = authed_client.post(f"/api/session/{sid}/mobile_qr").get_json()["token"]
+        d = client.post(f"/api/mobile/{token}/guide",
+                        data={"photo": (io.BytesIO(photo), "f.jpg")}, content_type="multipart/form-data").get_json()
+        assert d["aligned"] and d["zones"][0]["in_frame"] and d["zones"][0]["view_dev"] is not None
+        assert d["limits"] == [10.0, 20.0]
+        # pacing: a second hint right after the first is refused cheaply
+        monkeypatch.setattr(app_module, "GUIDE_SPACING", 60.0)
+        d = client.post(f"/api/mobile/{token}/guide",
+                        data={"photo": (io.BytesIO(photo), "f.jpg")}, content_type="multipart/form-data").get_json()
+        assert d == {"busy": True}
+
     def test_calibrated_inspection(self, mongo, nn, authed_client, board):
         tid = _ready_recipe(authed_client, board)
         assert authed_client.post(f"/api/recipes/{tid}/publish").status_code == 200

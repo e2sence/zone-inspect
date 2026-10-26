@@ -562,7 +562,8 @@
                             operators will shoot the boards, all from about the same position and angle. The reference
                             itself may be shot at an angle; what matters is that photos are similar to the good samples.
                             Calibration measures, for every zone, how far each photo's viewpoint is from the typical
-                            viewpoint of the good samples, and lists those more than 20° away.</p>
+                            viewpoint of the good samples, and lists those more than 20° away. While shooting samples, the
+                            phone shows the same measure live (see "Viewpoint hint" in the mobile section).</p>
                         <p>Photograph boards the way operators will: hand-held, normal light. Connect a phone with the
                             QR code in step 4/5 (the phone uses the same camera settings as inspection), or upload from
                             a computer. Each photo is aligned to the reference; the card shows which zones are fully in
@@ -767,14 +768,22 @@
                         <h4>Zone Photos</h4>
                         <p>The "Zone" tab shows which zone to photograph next. Navigate between zones with left/right
                             arrows.</p>
+                        <h4>Viewpoint hint</h4>
+                        <p>While a zone is being framed, the bottom of the viewfinder shows a live hint: whether the
+                            zone is fully in the frame and, for a calibrated recipe, how far the viewpoint is from the
+                            typical viewpoint of the recipe's good samples. Green: up to 10°; yellow: up to 20°; red:
+                            more. For yellow and red an arrow shows which way to move the phone. It is only a hint;
+                            capturing is never blocked. The phone of a lead collecting samples in Recipe Studio shows the
+                            same hint, measured against the good samples taken so far (from 3 of them per zone). With
+                            many phones framing at once the hints update less often, so that inspections stay fast.</p>
                         <h4>Anchor Alignment</h4>
                         <p>If anchor points are defined for the zone, the camera feed shows dashed guide circles at
                             target positions. Real-time template matching detects anchors in the live video. When
                             aligned (solid green circles + checkmark), press "Capture Zone".</p>
                         <h4>Capture & Upload</h4>
-                        <p>Press "Capture Zone" to take a photo. A shutter sound plays. The photo is queued for the
-                            desktop, which processes it automatically (polls every 5 seconds). Multiple photos can also
-                            be uploaded from the gallery.</p>
+                        <p>Press "Capture Zone" to take a photo. A shutter sound plays. The photo is checked as soon
+                            as it is uploaded: the verdict appears on the phone and the full result on the desktop (polls
+                            every 1.5 seconds). Multiple photos can also be uploaded from the gallery.</p>
                         <h4>Mobile Actions</h4>
                         <ul>
                             <li><strong>Skip -> New SN:</strong> save current result and start a new board from mobile.
@@ -1225,7 +1234,8 @@ curl -s "$HOST/api/v1/results"
                             операторы будут снимать платы: примерно с одного места и под одним углом. Эталон сам может быть
                             снят под углом; важно, чтобы снимки были похожи на хорошие образцы. Калибровка для каждой зоны
                             измеряет, насколько ракурс снимка отличается от типичного ракурса хороших образцов, и
-                            показывает те, что отличаются больше чем на 20°.</p>
+                            показывает те, что отличаются больше чем на 20°. При съёмке образцов телефон показывает ту же меру
+                            вживую (см. «Подсказка ракурса» в разделе о мобильной странице).</p>
                         <p>Снимайте так же, как будут снимать операторы: с рук, при обычном свете. Подключите телефон
                             по QR-коду на шаге 4/5 (телефон использует те же настройки камеры, что и при инспекции) или
                             загрузите фото с компьютера. Каждое фото выравнивается по эталону; на карточке видно, какие
@@ -1430,14 +1440,22 @@ curl -s "$HOST/api/v1/results"
                         <h4>Фото зон</h4>
                         <p>Вкладка "Zone" показывает какую зону нужно снять. Переключение между зонами стрелками
                             влево/вправо.</p>
+                        <h4>Подсказка ракурса</h4>
+                        <p>Пока зона наводится, внизу видоискателя видна подсказка: целиком ли зона в кадре и, для
+                            откалиброванного рецепта, насколько ракурс отличается от типичного ракурса хороших образцов
+                            рецепта. Зелёный — до 10°, жёлтый — до 20°, красный — больше. Для жёлтого и красного стрелка
+                            показывает, куда сдвинуть телефон. Это только подсказка, снимать можно всегда. Телефон
+                            ведущего при съёмке образцов в Recipe Studio показывает ту же подсказку относительно уже
+                            снятых хороших образцов (от 3 на зону). Когда наводятся сразу много телефонов, подсказки
+                            обновляются реже, чтобы проверки оставались быстрыми.</p>
                         <h4>Выравнивание по якорям</h4>
                         <p>Если у зоны заданы якорные точки — на видео камеры показываются штриховые круги-ориентиры. В
                             реальном времени определяются позиции якорей на изображении. При совпадении (зелёные круги +
                             галочка) — можно снимать.</p>
                         <h4>Съёмка и загрузка</h4>
-                        <p>"Capture Zone" — снимок. Звук затвора. Фото ставится в очередь для десктопа, где
-                            обрабатывается автоматически (опрос каждые 5 секунд). Также можно загрузить несколько фото
-                            из галереи.</p>
+                        <p>"Capture Zone" — снимок. Звук затвора. Фото проверяется сразу при загрузке, вердикт
+                            появляется на телефоне, полный результат — на десктопе (опрос каждые 1,5 секунды). Также
+                            можно загрузить несколько фото из галереи.</p>
                         <h4>Действия с мобильного</h4>
                         <ul>
                             <li><strong>Skip -> New SN:</strong> сохранить текущий результат и начать новый объект.</li>

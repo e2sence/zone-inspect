@@ -467,6 +467,7 @@
 
     <!-- Barcode reader in the browser (iPhone Safari has no BarcodeDetector); the .wasm loads on first use -->
     <script src="/static/vendor/zxing-wasm-3.1.4/reader.js"></script>
+    <script src="/static/view-guide.js"></script>
     <script>
         let TOKEN = '';
         let SESSION_ID = '';
@@ -618,9 +619,24 @@
             document.getElementById('info-status').textContent = `Checked: ${checked}/${total}`;
         }
 
+        // Viewpoint hint for the zone being shot (typical viewpoint from the recipe's calibration)
+        let zoneCapturing = false;
+        let viewGuide = null;
+        function guide() {
+            if (!viewGuide && window.ViewGuide) viewGuide = ViewGuide({
+                video: document.getElementById('zone-video'),
+                container: document.getElementById('zone-capture-area'),
+                url: `${BASE_URL}/api/mobile/${TOKEN}/guide`,
+                pick: d => d.zones[currentZoneIdx] || null,
+                paused: () => zoneCapturing,
+            });
+            return viewGuide;
+        }
+
         function switchMode(mode) {
             stopScan();
             stopAnchorDetect();
+            if (mode !== 'zone' && viewGuide) viewGuide.stop();
             document.getElementById('tab-serial').classList.toggle('active', mode === 'serial');
             document.getElementById('tab-zone').classList.toggle('active', mode === 'zone');
             document.getElementById('serial-mode').classList.toggle('hidden', mode !== 'serial');
@@ -631,6 +647,7 @@
                     updateZoneNav();
                     drawReferenceAnchors();
                     if (anchorRefs.length > 0) startAnchorDetect();
+                    if (guide()) guide().start();
                 }
             });
         }
@@ -1110,6 +1127,7 @@
             const btn = document.getElementById('btn-zone-capture');
             btn.disabled = true;
             btn.innerHTML = '<span class="spinner"></span> Checking…';
+            zoneCapturing = true;
             try {
                 const blob = await captureFrame('zone-video', 'zone-canvas');
                 playBeep();
@@ -1121,6 +1139,7 @@
             } catch (e) {
                 showZoneResult(`❌ ${e.message}`, 'err');
             } finally {
+                zoneCapturing = false;
                 btn.disabled = false;
                 btn.innerHTML = 'Capture Zone';
             }

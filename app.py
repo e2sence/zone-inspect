@@ -3153,6 +3153,119 @@ def mobile_sample_status(token):
                     "min_defect": recipes_mod.MIN_DEFECT_PER_ZONE})
 
 
+# ─── Live viewpoint hint (phone viewfinder) ──────────────────────────────────
+# The phone sends a small frame 2–3 times a second while framing a zone; the
+# answer says which zones are fully in the frame and, per zone, how far the
+# viewpoint is from the typical viewpoint of the good samples and which way to
+# move the phone. Only a hint: capturing is never blocked.
+
+def _guide_frame():
+    f = request.files.get("photo")
+    if not f:
+        return None
+    img = cv2.imdecode(np.frombuffer(f.read(), np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    k = 640.0 / max(img.shape[:2])      # enough for a viewpoint estimate within ~1°
+    return cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_AREA) if k < 1 else img
+
+
+# Hints are capped server-wide: one at a time and at most one start every
+# GUIDE_SPACING s (≈ 30 % of one core; measured: a zone check takes 0.98 s
+# instead of 0.8 s with any number of phones framing). With several phones
+# framing at once the hints get less frequent instead of slowing down inspections.
+GUIDE_SPACING = 0.6
+_guide_lock = threading.Lock()
+_guide_state = {"busy": False, "last": 0.0}
+
+
+def _guide_take() -> bool:
+    with _guide_lock:
+        now = time.time()
+        if _guide_state["busy"] or now - _guide_state["last"] < GUIDE_SPACING:
+            return False
+        _guide_state.update(busy=True, last=now)
+        return True
+
+
+def _guide_release():
+    with _guide_lock:
+        _guide_state["busy"] = False
+
+
+def _guide(ref_img, ref_sift, zones, views, frame) -> dict:
+    """Caller holds the slot (_guide_take); released here."""
+    try:
+        H, _ = estimate_homography(ref_img, frame, ref_sift, nfeatures=1500)
+    finally:
+        _guide_release()
+    if H is None:
+        return {"aligned": False, "zones": []}
+    wh = (frame.shape[1], frame.shape[0])
+    ref_wh = (ref_img.shape[1], ref_img.shape[0])
+    out = []
+    for zi, in_frame in enumerate(recipes_mod.zone_visibility(H, wh, ref_wh, zones)):
+        hint = calibration_mod.view_hint(H, wh, ref_wh, zones[zi], views[zi]) if in_frame and views.get(zi) else None
+        out.append({"zone": zi, "label": zones[zi].get("label", f"Zone {zi + 1}"), "in_frame": in_frame,
+                    "view_dev": hint[0] if hint else None, "move": hint[1] if hint else None})
+    return {"aligned": True, "zones": out,
+            "limits": [calibration_mod.VIEW_GOOD, calibration_mod.VIEW_DEVIATION_MAX]}
+
+
+@app.route("/api/mobile/<token>/guide", methods=["POST"])
+def mobile_guide(token):
+    """Viewpoint hint for the inspection phone (typical viewpoint from the
+    recipe's calibration)."""
+    sid = _get_token_session(token)
+    if not sid or sid not in sessions:
+        return jsonify({"error": "Invalid link"}), 404
+    if not NN_AVAILABLE:
+        return jsonify({"aligned": False, "zones": []})
+    if not _guide_take():
+        return jsonify({"busy": True})
+    frame = _guide_frame()
+    if frame is None:
+        _guide_release()
+        return jsonify({"error": "Photo not found"}), 400
+    s = sessions[sid]
+    if s.get("_ref_sift") is None:
+        s["_ref_sift"] = reference_sift(s["ref_img"])
+    views = {zc["zone"]: zc["view"] for zc in (s.get("calibration") or {}).get("zones", []) if zc.get("view")}
+    return jsonify(_guide(s["ref_img"], s["_ref_sift"], s["zones"], views, frame))
+
+
+_guide_views: dict[tuple, tuple] = {}     # (recipe, draft version) → (time, views)
+
+
+@app.route("/api/mobile/<token>/sample_guide", methods=["POST"])
+def mobile_sample_guide(token):
+    """Viewpoint hint for the lead's phone while collecting samples (typical
+    viewpoint from the good samples taken so far)."""
+    entry, draft = _sample_token(token)
+    if not entry:
+        return jsonify({"error": "Invalid or expired link"}), 404
+    if not draft or not draft.get("ref_image") or not NN_AVAILABLE:
+        return jsonify({"aligned": False, "zones": []})
+    tid = entry["recipe"]
+    key = (tid, draft["version"])
+    hit = _guide_views.get(key)
+    if not hit or time.time() - hit[0] > 15:       # new samples change the typical viewpoint
+        hit = (time.time(), calibration_mod.typical_views(draft, _derived_samples(tid, draft)))
+        if len(_guide_views) > 50:
+            _guide_views.clear()
+        _guide_views[key] = hit
+    ref, sift = _reference(tid, draft["ref_image"])
+    if ref is None or sift is None:
+        return jsonify({"aligned": False, "zones": []})
+    if not _guide_take():
+        return jsonify({"busy": True})
+    frame = _guide_frame()
+    if frame is None:
+        _guide_release()
+        return jsonify({"error": "Photo not found"}), 400
+    return jsonify(_guide(ref, sift, draft.get("zones", []), hit[1], frame))
+
+
 @app.route("/api/mobile/<token>/sample", methods=["POST"])
 def mobile_add_sample(token):
     entry, draft = _sample_token(token)

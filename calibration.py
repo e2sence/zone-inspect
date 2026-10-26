@@ -44,6 +44,7 @@ MARGIN_RANGE = (0.50, 2.50)   # OK limit ÷ worst good score, per zone
 DEFECT_BAND = 1.25         # DEFECT above t_ok × DEFECT_BAND
 MIN_GOOD_TO_CALIBRATE = 5
 VIEW_DEVIATION_MAX = 20.0  # degrees from the typical viewpoint of the good samples
+VIEW_GOOD = 10.0           # live hint on the phone is green up to here
 
 
 # ─── Viewpoint ───────────────────────────────────────────────────────────────
@@ -88,14 +89,60 @@ def board_normal(poses_per_photo):
     return min(normals, key=cost)
 
 
+def _camera_and_point(poses, normal, ref_wh, point):
+    """(R, camera centre, board point) in the reference camera frame."""
+    R, t, _ = min(poses, key=lambda p: _angle(p[2], normal, False))
+    a = np.linalg.inv(_K(ref_wh)) @ np.array([point[0], point[1], 1.0])
+    return R, -R.T @ t, a / float(normal @ a)
+
+
 def view_direction(poses, normal, ref_wh, point):
     """Unit vector from a board point (reference pixels) to the camera."""
     if not poses or normal is None:
         return None
-    R, t, _ = min(poses, key=lambda p: _angle(p[2], normal, False))
-    a = np.linalg.inv(_K(ref_wh)) @ np.array([point[0], point[1], 1.0])
-    d = -R.T @ t - a / float(normal @ a)
+    _, C, X = _camera_and_point(poses, normal, ref_wh, point)
+    d = C - X
     return d / np.linalg.norm(d)
+
+
+def zone_centre(zone, ref_wh):
+    return ((zone["x"] + zone["w"] / 2) * ref_wh[0], (zone["y"] + zone["h"] / 2) * ref_wh[1])
+
+
+def typical_views(version: dict, samples: list) -> dict:
+    """{zone index: {"typical", "normal"}} from the good samples that show the
+    zone — the live hint while samples are still being collected."""
+    ref_wh = version["ref_size"]
+    goods = [s for s in samples if s["kind"] == "good" and s.get("aligned") and not s.get("excluded")]
+    poses = {s["id"]: view_poses(s["align"]["H"], (s["width"], s["height"]), ref_wh) for s in goods}
+    normal = board_normal(list(poses.values()))
+    out = {}
+    if normal is None:
+        return out
+    for zi, zone in enumerate(version.get("zones", [])):
+        dirs = [view_direction(poses[s["id"]], normal, ref_wh, zone_centre(zone, ref_wh))
+                for s in goods if zi in s.get("visible_zones", [])]
+        dirs = [d for d in dirs if d is not None]
+        if len(dirs) >= 3:
+            m = np.mean(dirs, 0)
+            out[zi] = {"typical": (m / np.linalg.norm(m)).tolist(), "normal": normal.tolist(), "n": len(dirs)}
+    return out
+
+
+def view_hint(H, photo_wh, ref_wh, zone, view):
+    """Live hint for a camera frame: (degrees from the typical viewpoint,
+    unit (dx, dy) in the frame towards which the phone should move), or None."""
+    poses = view_poses(H, photo_wh, ref_wh)
+    if not poses:
+        return None
+    normal, typical = np.asarray(view["normal"]), np.asarray(view["typical"])
+    R, C, X = _camera_and_point(poses, normal, ref_wh, zone_centre(zone, ref_wh))
+    dist = float(np.linalg.norm(C - X))
+    dev = _angle(C - X, typical)
+    move = R @ (X + typical * dist - C)       # in the phone camera frame: x right, y down
+    v = move[:2]
+    n = float(np.linalg.norm(v))
+    return round(dev, 1), ([round(float(v[0] / n), 3), round(float(v[1] / n), 3)] if n > 1e-9 else [0.0, 0.0])
 
 
 # ─── Geometry ────────────────────────────────────────────────────────────────

@@ -334,9 +334,10 @@ def align_photo_to_ref(ref_img: np.ndarray, photo: np.ndarray, ref_sift=None):
     return cv2.warpPerspective(photo, M_full, (rw, rh))
 
 
-def estimate_homography(ref_img: np.ndarray, photo: np.ndarray, ref_sift=None):
+def estimate_homography(ref_img: np.ndarray, photo: np.ndarray, ref_sift=None, nfeatures: int = 5000):
     """Homography photo → reference (full resolution) used by
-    align_photo_to_ref. Returns (M or None, info dict with match stats)."""
+    align_photo_to_ref. Returns (M or None, info dict with match stats).
+    Fewer photo features (nfeatures) for fast, coarser live hints."""
     ph, pw = photo.shape[:2]
     p_scale = min(_ALIGN_MAX_DIM / max(ph, pw), 1.0)
     pts1, des1, r_scale = ref_sift if ref_sift is not None else reference_sift(ref_img)
@@ -345,7 +346,7 @@ def estimate_homography(ref_img: np.ndarray, photo: np.ndarray, ref_sift=None):
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     photo_gray = clahe.apply(cv2.cvtColor(photo_small, cv2.COLOR_BGR2GRAY))
 
-    sift = cv2.SIFT_create(nfeatures=5000)
+    sift = cv2.SIFT_create(nfeatures=nfeatures)
     kp2, des2 = sift.detectAndCompute(photo_gray, None)
 
     if des1 is None or des2 is None or len(des1) < 10 or len(des2) < 10:

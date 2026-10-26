@@ -78,6 +78,7 @@
         <div class="zones" id="zones"></div>
     </div>
 
+    <script src="/static/view-guide.js"></script>
     <script>
         const TOKEN = new URLSearchParams(location.search).get('token') || '';
         const $ = id => document.getElementById(id);
@@ -157,6 +158,17 @@
                 await $('video').play();
                 $('msg').classList.add('hidden');
                 updateShutter();
+                // Viewpoint hint: typical viewpoint of the good samples taken so far; shows the
+                // zone in the frame that is furthest from it
+                if (window.ViewGuide) ViewGuide({
+                    video: $('video'), container: document.querySelector('.vf'),
+                    url: `/api/mobile/${TOKEN}/sample_guide`, paused: () => busy,
+                    pick: d => {
+                        const inFrame = d.zones.filter(z => z.in_frame);
+                        if (!inFrame.length) return null;
+                        return inFrame.reduce((a, z) => (z.view_dev ?? -1) > (a.view_dev ?? -1) ? z : a);
+                    },
+                }).start();
             } catch (e) {
                 $('msg').textContent = 'Camera unavailable. Allow camera access for this site and reload.';
             }
