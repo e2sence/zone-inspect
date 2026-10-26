@@ -10,7 +10,7 @@ bind = f"127.0.0.1:{os.environ.get('PORT', '5001')}"
 # so in-memory dicts (sessions, mobile_tokens) are always consistent.
 # PyTorch releases the GIL during inference → threads can serve other requests.
 workers = 1
-threads = 4
+threads = 8   # light requests (polling, hints) must not wait behind zone checks; checks are capped in app.py (CHECK_CONCURRENCY)
 worker_class = "gthread"
 timeout = 120  # ML inference can take time on large images
 graceful_timeout = 30

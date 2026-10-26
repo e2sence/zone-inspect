@@ -1122,7 +1122,8 @@ def check_zone(sid):
     """Шаг 3: Загрузить фото зоны → система ищет, какой зоне оно соответствует."""
     import traceback
     try:
-        return _check_zone_impl(sid)
+        with _check_slots:
+            return _check_zone_impl(sid)
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": f"Internal error: {e}"}), 500
@@ -1292,6 +1293,15 @@ def _check_zone_calibrated(s: dict, photo, from_mobile: bool, photo_path):
     result["progress"] = {"done": done, "total": total, "complete": done >= total}
     result["checked_zones"] = list(s["checked"].keys())
     return jsonify(result)
+
+
+# Zone checks are CPU-bound (SIFT + CNN, each using several cores): running
+# more than about one per physical core at a time only makes all of them
+# slower. Extra requests wait here; the web threads stay free for the light
+# requests (polling, serial, hints). Load test, 8 stations: p90 2.65 s with 4
+# threads and no limit, 3.82 s with 8 threads and no limit.
+CHECK_CONCURRENCY = int(_os.environ.get("CHECK_CONCURRENCY", "2"))
+_check_slots = threading.BoundedSemaphore(CHECK_CONCURRENCY)
 
 
 def _check_zone_impl(sid, photo_img=None, sens_override=None):
@@ -3580,7 +3590,8 @@ def mobile_zone_photo(token):
         k = max_dim / max(h, w)
         img = cv2.resize(img, (int(w * k), int(h * k)))
     try:
-        out = _check_zone_impl(sid, photo_img=img, sens_override=s.get("_mobile_sens"))
+        with _check_slots:
+            out = _check_zone_impl(sid, photo_img=img, sens_override=s.get("_mobile_sens"))
     except Exception as e:
         app.logger.exception("Phone photo check failed")
         return jsonify({"error": f"Internal error: {e}"}), 500
