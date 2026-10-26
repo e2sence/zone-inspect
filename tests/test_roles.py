@@ -20,26 +20,20 @@ class TestOperatorRestrictions:
         client.set_cookie("pcb_auth_key", "test-lead-key-1111")
         return client
 
-    def test_operator_cannot_save_template(self, operator_client,
-                                           test_image_bytes, mongo_available):
-        if not mongo_available:
-            pytest.skip("MongoDB not available")
-        # Create session first
+    def test_operator_cannot_create_adhoc_session(self, operator_client,
+                                                  test_image_bytes):
         resp = operator_client.post(
             "/api/session",
             data={"image": (io.BytesIO(test_image_bytes), "board.jpg")},
             content_type="multipart/form-data",
         )
-        sid = resp.get_json()["session_id"]
-        operator_client.post(
-            f"/api/session/{sid}/zones",
-            json={"zones": [{"x": 0, "y": 0, "w": 1, "h": 1}]},
-        )
-        resp = operator_client.post(
-            "/api/templates",
-            json={"session_id": sid, "name": "Test Template"},
-        )
         assert resp.status_code == 403
+
+    def test_operator_cannot_use_studio(self, operator_client):
+        assert operator_client.get("/api/recipes").status_code == 403
+        assert operator_client.post("/api/recipes",
+                                    json={"name": "X"}).status_code == 403
+        assert operator_client.get("/studio").status_code == 302
 
     def test_operator_cannot_delete_template(self, operator_client,
                                              mongo_available):
@@ -48,15 +42,9 @@ class TestOperatorRestrictions:
         resp = operator_client.delete("/api/templates/fake_id")
         assert resp.status_code == 403
 
-    def test_operator_cannot_update_template(self, operator_client,
-                                             mongo_available):
-        if not mongo_available:
-            pytest.skip("MongoDB not available")
-        resp = operator_client.put(
-            "/api/templates/fake_id",
-            json={"name": "New Name"},
-        )
-        assert resp.status_code == 403
+    def test_operator_cannot_publish(self, operator_client):
+        assert operator_client.post(
+            "/api/recipes/fake_id/publish").status_code == 403
 
 
 class TestReadOnlyApiKey:

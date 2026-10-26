@@ -327,7 +327,16 @@ def align_photo_to_ref(ref_img: np.ndarray, photo: np.ndarray, ref_sift=None):
     ref_sift: результат reference_sift(ref_img) (кэш на сессию), иначе считается.
     Returns: warped photo (same size as ref_img) or None.
     """
+    M_full, _ = estimate_homography(ref_img, photo, ref_sift)
+    if M_full is None:
+        return None
     rh, rw = ref_img.shape[:2]
+    return cv2.warpPerspective(photo, M_full, (rw, rh))
+
+
+def estimate_homography(ref_img: np.ndarray, photo: np.ndarray, ref_sift=None):
+    """Homography photo → reference (full resolution) used by
+    align_photo_to_ref. Returns (M or None, info dict with match stats)."""
     ph, pw = photo.shape[:2]
     p_scale = min(_ALIGN_MAX_DIM / max(ph, pw), 1.0)
     pts1, des1, r_scale = ref_sift if ref_sift is not None else reference_sift(ref_img)
@@ -340,31 +349,31 @@ def align_photo_to_ref(ref_img: np.ndarray, photo: np.ndarray, ref_sift=None):
     kp2, des2 = sift.detectAndCompute(photo_gray, None)
 
     if des1 is None or des2 is None or len(des1) < 10 or len(des2) < 10:
-        return None
+        return None, {"reason": "not enough features"}
 
     matches = flann_knn(des1, des2, k=2)
 
     good = [m for m_pair in matches if len(m_pair) == 2
             for m, n in [m_pair] if m.distance < 0.7 * n.distance]
     if len(good) < 15:
-        return None
+        return None, {"reason": "too few matches", "matches": len(good)}
 
     src_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
     dst_pts = pts1[[m.queryIdx for m in good]].reshape(-1, 1, 2)
     M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 3.0)
 
     if M is None or mask is None:
-        return None
+        return None, {"reason": "no homography", "matches": len(good)}
     inlier_ratio = mask.sum() / len(mask)
     if inlier_ratio < 0.25:
-        return None
+        return None, {"reason": "low inlier ratio", "matches": len(good),
+                      "inlier_ratio": round(float(inlier_ratio), 3)}
 
     S_src = np.diag([p_scale, p_scale, 1.0])
     S_dst_inv = np.diag([1 / r_scale, 1 / r_scale, 1.0])
     M_full = S_dst_inv @ M @ S_src
-
-    warped = cv2.warpPerspective(photo, M_full, (rw, rh))
-    return warped
+    return M_full, {"matches": len(good),
+                    "inlier_ratio": round(float(inlier_ratio), 3)}
 
 
 @torch.no_grad()

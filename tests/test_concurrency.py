@@ -88,7 +88,7 @@ class TestMobileTokenIsolation:
             self, flask_app, test_image_bytes):
         import app as app_module
         with flask_app.test_client() as a, flask_app.test_client() as b:
-            a.set_cookie("pcb_auth_key", "test-operator-key-2222")
+            a.set_cookie("pcb_auth_key", "test-admin-key-0000")
             b.set_cookie("pcb_auth_key", "test-lead-key-1111")
             sid_a = _new_session(a, test_image_bytes)
             tok_a = _qr(a, sid_a)
@@ -111,7 +111,7 @@ class TestMobileTokenIsolation:
             self, flask_app, test_image_bytes):
         import app as app_module
         with flask_app.test_client() as a, flask_app.test_client() as b:
-            a.set_cookie("pcb_auth_key", "test-operator-key-2222")
+            a.set_cookie("pcb_auth_key", "test-admin-key-0000")
             b.set_cookie("pcb_auth_key", "test-lead-key-1111")
             sid_a = _new_session(a, test_image_bytes)
             tok_a = _qr(a, sid_a)

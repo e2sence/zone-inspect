@@ -204,8 +204,16 @@ def session_with_zones(authed_client, test_image_bytes):
 
 @pytest.fixture(scope="session")
 def mongo_available(_patch_env):
-    """True if MongoDB is connected."""
+    """True if MongoDB is connected. Starts from empty collections — only
+    ever on a database whose name ends in '_test'."""
     import app as app_module
+    if app_module.MONGO_AVAILABLE:
+        db = app_module._mongo_db
+        assert db.name.endswith("_test"), (
+            f"refusing to run Mongo tests against '{db.name}'")
+        for col in ("templates", "recipe_versions", "samples",
+                    "inspection_results"):
+            db[col].delete_many({})
     return app_module.MONGO_AVAILABLE
 
 
