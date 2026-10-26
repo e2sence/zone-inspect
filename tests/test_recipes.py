@@ -217,6 +217,16 @@ class TestRecipeLifecycle:
                                json={"zones": moved}).get_json()
         assert st["summary"]["zones"][0]["good"] == 15
 
+    def test_legacy_history_kept_when_migrated_from_the_list(self, mongo, authed_client):
+        """Opening the Studio list must not lose embedded version history."""
+        import app as app_module
+        app_module._templates_col.insert_one({
+            "id": "legacy02", "name": "Legacy list", "version": 3, "zones": [ZONE],
+            "ref_image": "ref.jpg", "group": "",
+            "versions": [{"version": 1, "zones": [ZONE]}, {"version": 2, "zones": [ZONE]}]})
+        authed_client.get("/api/recipes")
+        assert app_module._versions_col.count_documents({"recipe_id": "legacy02"}) == 3
+
     def test_legacy_template_is_migrated_on_access(self, mongo, authed_client):
         import app as app_module
         app_module._templates_col.insert_one({

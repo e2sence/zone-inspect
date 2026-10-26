@@ -2218,7 +2218,8 @@ def studio_list_recipes():
     if err:
         return err
     out = []
-    for doc in _templates_col.find(_group_filter(), {"_id": 0, "versions": 0}):
+    # Full documents: migration needs the embedded `versions` history
+    for doc in _templates_col.find(_group_filter(), {"_id": 0}):
         recipes_mod.migrate_template(doc, _versions_col)
         draft = _draft_of(doc["id"])
         counts = {"good": 0, "defect": 0}
