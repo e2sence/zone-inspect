@@ -367,7 +367,12 @@
                 <span class="st-progress${have >= need ? '' : ' partial'}"><i style="width:${pct}%"></i></span>
                 <span class="chip ${have >= need ? 'ok' : 'warn'}">${have} / ${need}</span></div>${crit ? `<div class="st-row">${crit}</div>` : ''}`;
         }).join('') || '<p class="st-muted">Define zones in step 3 first.</p>';
-        const devices = s.devices.length ? s.devices.map(d => `<span class="chip">${esc(d)}</span>`).join(' ') : '<span class="chip warn">no phone named yet</span>';
+        const devs = (good ? s.good_devices : s.defect_devices) || [];
+        const devices = devs.length ? devs.map(d => `<span class="chip">${esc(d)}</span>`).join(' ')
+            + (good && devs.length < 2 ? ' <span class="chip warn">2 phones needed</span>' : '')
+            : '<span class="chip warn">no phone named yet</span>';
+        const small = s.zones.filter(z => z.smallest && z.smallest.px_in_photos !== null && z.smallest.px_in_photos < 48)
+            .map(z => `${esc(z.label)}${z.smallest.name !== 'zone' ? ' / ' + esc(z.smallest.name) : ''} ≈ ${z.smallest.px_in_photos} px`);
         const stale = s.stale ? `<div class="st-confirm">${s.stale} sample(s) were aligned to an older reference and are not counted.
             <button class="btn btn-sm" data-realign>Re-align now</button></div>` : '';
         const intro = good
@@ -392,7 +397,8 @@
                         <label class="btn btn-sm st-file">Choose photos<input type="file" accept="image/*" multiple data-upload></label>
                     </div>
                     ${rows}
-                    <div class="st-row"><span class="st-muted">Phones:</span> ${devices}
+                    ${small.length && good ? `<p class="st-hint" style="color:var(--warn)">Too small in the photos: ${small.join(', ')}. Shoot closer or make it larger (48+ px).</p>` : ''}
+                    <div class="st-row"><span class="st-muted">Phones${good ? ' (good samples)' : ''}:</span> ${devices}
                         ${good ? `<span class="st-muted">· boards: ${s.boards.length}</span>` : ''}</div>
                 </div>
             </div>

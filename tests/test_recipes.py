@@ -61,6 +61,41 @@ class TestModel:
         assert "good samples" in text and "defect samples" in text
         assert "critical" in text and "phone" in text
 
+    @staticmethod
+    def _sample(kind, device, visible, defects=(), scale=1.0):
+        H = np.diag([scale, scale, 1.0]).tolist()   # ref px per photo px = scale
+        return {"kind": kind, "device": device, "aligned": True, "excluded": False,
+                "visible_zones": visible, "align": {"H": H}, "board": "1",
+                "defects": [{"zone": z, "subzone": sz} for z, sz in defects]}
+
+    def _version(self, zones=None):
+        return {"ref_image": "v1/ref.jpg", "ref_quality": {"level": "ok"},
+                "ref_size": [1200, 900], "zones": zones or [dict(ZONE, subzones=[])]}
+
+    def test_defect_counts_only_when_zone_fully_in_frame(self):
+        v = self._version()
+        samples = [self._sample("defect", "A", [0], [(0, None)]),
+                   self._sample("defect", "A", [], [(0, None)])]      # zone cut off
+        assert R.sample_summary(v, samples)["zones"][0]["defect"] == 1
+
+    def test_two_phones_required_among_good_samples(self):
+        v = self._version()
+        samples = ([self._sample("good", "iPhone 14", [0]) for _ in range(15)] +
+                   [self._sample("defect", "iPhone 12", [0], [(0, None)]) for _ in range(2)])
+        check = R.publish_check(v, R.sample_summary(v, samples))
+        assert any("Good samples from 1 phone" in b for b in check["blockers"])
+        samples[0]["device"] = "Xiaomi 14"
+        assert R.publish_check(v, R.sample_summary(v, samples))["ok"]
+
+    def test_small_subzone_warning(self):
+        zone = dict(ZONE, subzones=[{"x": 0, "y": 0, "w": 0.2, "h": 0.1, "label": "S1"}])
+        v = self._version([zone])
+        # S1 short side in ref: 0.1*0.40*900 = 36 px; photos at 1:1 scale → 36 px
+        samples = [self._sample("good", d, [0]) for d in ("A", "B") * 8]
+        summary = R.sample_summary(v, samples)
+        assert summary["zones"][0]["smallest"] == {"name": "S1", "px_in_photos": 36}
+        assert any("S1 is about 36 px" in w for w in R.publish_check(v, summary)["warnings"])
+
     def test_photo_quality_flags_blur_and_darkness(self):
         board = make_board()
         assert R.photo_quality(board)["level"] == "ok"

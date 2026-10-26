@@ -30,8 +30,9 @@ MIRROR_FIELDS = ("name", "barcode_mask", "zones", "ref_image",
 MIN_GOOD_PER_ZONE = 15
 MIN_DEFECT_PER_ZONE = 2
 MIN_DEFECT_PER_CRITICAL_SUBZONE = 1
-MIN_DEVICES = 2
+MIN_DEVICES = 2               # among GOOD samples: phone-to-phone variation is normal
 MIN_BOARDS = 3
+MIN_FEATURE_PX = 48           # zone/subzone short side in a sample photo
 
 DEFECT_TYPES = ("missing", "wrong_part", "shifted", "rotated",
                 "contamination", "damage", "other")
@@ -207,6 +208,12 @@ def zone_visibility(H, photo_wh, ref_wh, zones, tol_px: float = 2.0) -> list[boo
     return out
 
 
+def photo_scale(H) -> float:
+    """Reference pixels per photo pixel (linear), from the homography."""
+    A = np.asarray(H, np.float64)
+    return float(np.sqrt(abs(np.linalg.det(A[:2, :2] / A[2, 2]))))
+
+
 def locate_box(box: dict, zones: list[dict]):
     """(zone, subzone) whose rectangle contains the centre of a defect box
     given in normalized reference coordinates; None where nothing matches.
@@ -258,11 +265,13 @@ def sample_summary(version: dict, samples: list[dict]) -> dict:
     per_zone = []
     # Only samples aligned to this version's reference count
     active = [s for s in samples if not s.get("excluded") and s.get("aligned")]
+    rw, rh = version.get("ref_size") or (1, 1)
     for i, z in enumerate(zones):
-        key = str(i)
+        # A sample counts for a zone only when the whole zone is in the frame
         good = [s for s in active if s["kind"] == "good"
-                and s.get("zones", {}).get(key) == "ok"]
+                and i in s.get("visible_zones", [])]
         bad = [s for s in active if s["kind"] == "defect"
+               and i in s.get("visible_zones", [])
                and any(d.get("zone") == i for d in s.get("defects", []))]
         crit = []
         for j, sz in enumerate(z.get("subzones", [])):
@@ -271,16 +280,30 @@ def sample_summary(version: dict, samples: list[dict]) -> dict:
                         if d.get("zone") == i and d.get("subzone") == j)
                 crit.append({"subzone": j, "label": sz.get("label", f"S{j+1}"),
                              "defects": n})
+        # How big the zone / smallest subzone appear in the good photos
+        smallest = ("zone", min(z["w"] * rw, z["h"] * rh))
+        for sz in z.get("subzones", []):
+            side = min(sz["w"] * z["w"] * rw, sz["h"] * z["h"] * rh)
+            if side < smallest[1]:
+                smallest = (sz.get("label", "subzone"), side)
+        scales = [photo_scale(s["align"]["H"]) for s in good]
+        px = round(smallest[1] / float(np.median(scales))) if scales else None
         per_zone.append({
             "zone": i, "label": z.get("label", f"Zone {i+1}"),
             "good": len(good), "defect": len(bad),
             "critical_subzones": crit,
+            "smallest": {"name": smallest[0], "px_in_photos": px},
         })
     devices = sorted({s.get("device") or "unknown" for s in active
                       if s.get("device")})
+    good_devices = sorted({s["device"] for s in active
+                           if s["kind"] == "good" and s.get("device")})
+    defect_devices = sorted({s["device"] for s in active
+                             if s["kind"] == "defect" and s.get("device")})
     boards = sorted({s.get("board") for s in active
                      if s["kind"] == "good" and s.get("board")})
     return {"zones": per_zone, "devices": devices, "boards": boards,
+            "good_devices": good_devices, "defect_devices": defect_devices,
             "stale": sum(1 for s in samples if s.get("stale") and not s.get("excluded")),
             "unaligned": sum(1 for s in samples if not s.get("stale")
                              and not s.get("aligned") and not s.get("excluded")),
@@ -308,9 +331,14 @@ def publish_check(version: dict, summary: dict) -> dict:
                 blockers.append(f"{z['label']} / {c['label']} (critical): no defect sample")
     if summary.get("stale"):
         warnings.append(f"{summary['stale']} sample(s) were aligned to an older reference; re-align them to count")
-    real_devices = [d for d in summary["devices"] if d != "unknown"]
-    if len(real_devices) < MIN_DEVICES:
-        blockers.append(f"Samples from {len(real_devices)} phone(s); at least {MIN_DEVICES} different phones required")
+    good_devices = [d for d in summary.get("good_devices", []) if d != "unknown"]
+    if len(good_devices) < MIN_DEVICES:
+        blockers.append(f"Good samples from {len(good_devices)} phone(s); at least {MIN_DEVICES} different phones required")
+    for z in summary["zones"]:
+        sm = z.get("smallest") or {}
+        if sm.get("px_in_photos") is not None and sm["px_in_photos"] < MIN_FEATURE_PX:
+            what = z["label"] if sm["name"] == "zone" else f"{z['label']} / {sm['name']}"
+            warnings.append(f"{what} is about {sm['px_in_photos']} px in the photos; shoot closer or make it larger ({MIN_FEATURE_PX}+ px)")
     if len(summary["boards"]) < MIN_BOARDS:
         warnings.append(f"Good samples from {len(summary['boards'])} board(s); {MIN_BOARDS}+ recommended")
     return {"ok": not blockers, "blockers": blockers, "warnings": warnings}
