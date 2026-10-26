@@ -2344,6 +2344,20 @@ def studio_get_draft(tid):
     return jsonify(out)
 
 
+@app.route("/api/recipes/<tid>/draft/state", methods=["GET"])
+def studio_draft_state(tid):
+    """Sample summary + publish check only (cheap; polled while capturing)."""
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    if not draft:
+        return jsonify({"error": "No draft"}), 404
+    return jsonify(_draft_state(tid, draft))
+
+
 _DRAFT_FIELDS = ("name", "barcode_mask", "zones", "shooting_plan",
                  "operator_notes", "zone_sensitivity", "subzone_sensitivity")
 
@@ -2797,11 +2811,17 @@ def mobile_samples_page():
     return resp
 
 
+_NO_DRAFT_MSG = ("This recipe has no open draft. Open a draft in Recipe "
+                 "Studio, then scan the new QR code.")
+
+
 @app.route("/api/mobile/<token>/sample_status")
 def mobile_sample_status(token):
     entry, draft = _sample_token(token)
-    if not entry or not draft:
+    if not entry:
         return jsonify({"error": "Invalid or expired link"}), 404
+    if not draft:
+        return jsonify({"error": _NO_DRAFT_MSG}), 409
     doc = _templates_col.find_one({"id": entry["recipe"]}, {"_id": 0, "name": 1})
     state = _draft_state(entry["recipe"], draft)
     return jsonify({"recipe": doc.get("name", "") if doc else "",
@@ -2815,8 +2835,10 @@ def mobile_sample_status(token):
 @app.route("/api/mobile/<token>/sample", methods=["POST"])
 def mobile_add_sample(token):
     entry, draft = _sample_token(token)
-    if not entry or not draft:
+    if not entry:
         return jsonify({"error": "Invalid or expired link"}), 404
+    if not draft:
+        return jsonify({"error": _NO_DRAFT_MSG}), 409
     kind = _sample_kind(request.form.get("kind"))
     f = request.files.get("photo")
     if not kind or not f:

@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Recipe Studio · Zone Inspect</title>
+    <link rel="stylesheet" href="/static/jbmono.css">
+    <link rel="stylesheet" href="/static/style.css?v={{ v }}">
+    <link rel="stylesheet" href="/static/studio.css?v={{ v }}">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>Zone Inspect</h1>
+                <p>// recipe studio</p>
+            </div>
+            <div class="st-head-links">
+                <span class="st-badge">{{ auth_user }} <span>{{ auth_role }}{% if auth_group %} / {{ auth_group }}{% endif %}</span></span>
+                <a href="/" class="st-link">Inspection</a>
+                <a href="/doc#studio" target="_blank" class="st-link">Documentation</a>
+                <a href="/logout" class="st-link">Logout</a>
+            </div>
+        </header>
+
+        <!-- ═══ Recipe list ═══ -->
+        <section id="view-list">
+            <div class="card">
+                <div class="st-row st-between">
+                    <h2 class="st-h2">Recipes <span id="recipe-count" class="st-muted"></span></h2>
+                    <button class="btn btn-sm" id="btn-new-recipe">New recipe</button>
+                </div>
+                <form id="new-recipe-form" class="st-form hidden" autocomplete="off">
+                    <div class="st-grid2">
+                        <label>Name <input id="nr-name" required placeholder="e.g. Module XY-300"></label>
+                        <label>Barcode mask <input id="nr-mask" placeholder="e.g. 7334"></label>
+                    </div>
+                    {% if auth_role == 'admin' %}
+                    <label>Group <input id="nr-group" placeholder="e.g. line1 (empty = all groups)"></label>
+                    {% endif %}
+                    <div class="st-row">
+                        <button class="btn btn-sm" type="submit">Create draft</button>
+                        <button class="btn btn-sm btn-outline" type="button" id="nr-cancel">Cancel</button>
+                    </div>
+                </form>
+                <div class="st-table-wrap">
+                    <table class="data-table st-table" id="recipe-table">
+                        <thead>
+                            <tr><th>Recipe</th><th>Live</th><th>Draft</th><th>Zones</th><th>Samples good / defect</th><th>Group</th></tr>
+                        </thead>
+                        <tbody><tr><td colspan="6" class="st-muted">Loading…</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ Recipe ═══ -->
+        <section id="view-recipe" class="hidden">
+            <div class="st-row st-between st-recipe-head">
+                <div class="st-row">
+                    <a href="#" id="back-to-list" class="st-link">← Recipes</a>
+                    <h2 class="st-h2" id="rc-title"></h2>
+                    <span id="rc-badges" class="st-row"></span>
+                </div>
+                <div class="st-row">
+                    <button class="btn btn-sm btn-outline" id="btn-open-draft">Edit (new draft)</button>
+                    <button class="btn btn-sm btn-danger" id="btn-delete-recipe">Delete recipe</button>
+                </div>
+            </div>
+
+            <div class="st-layout">
+                <div class="st-main">
+                    <div id="no-draft" class="card hidden">
+                        <p class="st-muted">This recipe has no draft. Use <b>Edit (new draft)</b> to change zones,
+                            reference or samples; the line keeps using the live version until you publish.</p>
+                    </div>
+
+                    <div id="draft-area" class="hidden">
+                        <div class="steps-ind" id="step-tabs"></div>
+
+                        <!-- 1 Details -->
+                        <div class="card st-step" data-step="1">
+                            <h3 class="st-h3">1 · Details</h3>
+                            <form id="details-form" class="st-form" autocomplete="off">
+                                <div class="st-grid2">
+                                    <label>Name <input id="d-name" required></label>
+                                    <label>Barcode mask <input id="d-mask"></label>
+                                </div>
+                                <fieldset class="st-fieldset">
+                                    <legend>Shooting plan</legend>
+                                    <label class="st-radio"><input type="radio" name="d-plan" value="zones"> Zone by zone: one photo per zone</label>
+                                    <label class="st-radio"><input type="radio" name="d-plan" value="board"> Whole board: several zones per photo</label>
+                                </fieldset>
+                                <label>Notes for operators <textarea id="d-notes" rows="2" placeholder="Distance, lighting, angle…"></textarea></label>
+                                <div class="st-grid2">
+                                    <label>Zone strictness (0–2) <input id="d-zsens" type="number" min="0" max="2" step="0.01" placeholder="default 0.50"></label>
+                                    <label>Subzone strictness (0–2) <input id="d-ssens" type="number" min="0" max="2" step="0.01" placeholder="default 0.51"></label>
+                                </div>
+                                <p class="st-hint">Strictness is part of the recipe: operators cannot change it. Calibration
+                                    (coming in a later release) will set thresholds from your samples instead.</p>
+                                <div class="st-row"><button class="btn btn-sm" type="submit">Save details</button></div>
+                            </form>
+                        </div>
+
+                        <!-- 2 Reference -->
+                        <div class="card st-step" data-step="2">
+                            <h3 class="st-h3">2 · Reference image</h3>
+                            <div class="st-ref">
+                                <div class="st-ref-img"><img id="ref-preview" alt="Reference image" class="hidden"><p id="ref-empty" class="st-muted">No reference yet.</p></div>
+                                <div class="st-stack">
+                                    <div id="ref-quality"></div>
+                                    <label class="btn btn-sm st-file">Upload reference<input type="file" id="ref-file" accept="image/*"></label>
+                                    <label class="btn btn-sm btn-outline st-file">Blend several photos…<input type="file" id="ref-blend" accept="image/*" multiple></label>
+                                    <p class="st-hint">Use a sharp, evenly lit photo of a known-good board, taken the way operators
+                                        will shoot. Blending averages 2+ aligned photos to reduce noise and glare.</p>
+                                    <p class="st-hint" id="ref-warning"></p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 3 Zones -->
+                        <div class="card st-step" data-step="3">
+                            <div class="st-row st-between">
+                                <h3 class="st-h3">3 · Zones</h3>
+                                <div class="st-row"><span id="zones-dirty" class="st-muted"></span>
+                                    <button class="btn btn-sm" id="btn-save-zones">Save zones</button></div>
+                            </div>
+                            <div id="zone-editor"></div>
+                        </div>
+
+                        <!-- 4 + 5 Samples -->
+                        <div class="card st-step" data-step="4"></div>
+                        <div class="card st-step" data-step="5"></div>
+
+                        <!-- 6 Calibrate -->
+                        <div class="card st-step" data-step="6">
+                            <h3 class="st-h3">6 · Calibrate</h3>
+                            <p class="st-muted">Calibration builds a model of normal variation from your good samples and checks
+                                it against your defect samples. It arrives in a later release; until then this recipe
+                                inspects with the reference comparison and the strictness from step 1. The samples you
+                                collect now will be used as soon as calibration is available.</p>
+                            <div id="calib-summary"></div>
+                        </div>
+
+                        <!-- 7 Publish -->
+                        <div class="card st-step" data-step="7">
+                            <h3 class="st-h3">7 · Publish</h3>
+                            <div id="publish-check"></div>
+                            <div class="st-row">
+                                <button class="btn" id="btn-publish">Publish to the line</button>
+                                {% if auth_role == 'admin' %}
+                                <button class="btn btn-outline hidden" id="btn-publish-force">Publish anyway (admin)</button>
+                                {% endif %}
+                                <button class="btn btn-sm btn-outline" id="btn-discard-draft">Discard draft</button>
+                            </div>
+                            <div id="publish-confirm" class="st-confirm hidden"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <aside class="st-side">
+                    <div class="card">
+                        <h3 class="st-h3">Versions</h3>
+                        <ul id="version-list" class="st-versions"></ul>
+                    </div>
+                </aside>
+            </div>
+        </section>
+    </div>
+
+    <!-- Defect labelling -->
+    <div id="label-overlay" class="tpl-editor-overlay hidden">
+        <div class="tpl-editor st-label-dlg">
+            <button class="te-close" id="lb-close">&times;</button>
+            <h2>Label defect <span id="lb-title" class="st-muted"></span></h2>
+            <p class="st-hint">Draw a box around each defect on the aligned photo. Zone and subzone are detected from
+                the box position. Thin outlines show the recipe's zones.</p>
+            <div class="te-canvas-wrap st-lb-wrap"><canvas id="lb-canvas"></canvas></div>
+            <ul id="lb-list" class="st-lb-list"></ul>
+            <div class="te-actions">
+                <button class="btn" id="lb-save">Save labels</button>
+                <button class="btn btn-outline" id="lb-cancel">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script>window.STUDIO = { role: {{ auth_role|tojson }}, user: {{ auth_user|tojson }} };</script>
+    <script src="/static/zone-editor.js?v={{ v }}"></script>
+    <script src="/static/studio.js?v={{ v }}"></script>
+</body>
+
+</html>
