@@ -80,6 +80,7 @@ try:
                            estimate_homography,
                            extract_features, extract_features_batch,
                            align_photo_to_ref, NN_DEVICE)
+    import calibration as calibration_mod
     NN_AVAILABLE = True
 except ImportError:
     NN_AVAILABLE = False
@@ -1149,6 +1150,144 @@ def _cached_ref_feats(store: dict, crops: dict, preprocess=None) -> list:
     return [store[k] for k in crops]
 
 
+_calib_models: dict[tuple, dict] = {}   # (recipe id, version) → {zone: ZoneModel}
+_calib_models_lock = threading.Lock()
+
+
+def _zone_models(s: dict) -> dict:
+    key = (s.get("template_id"), s.get("template_version"))
+    with _calib_models_lock:
+        hit = _calib_models.get(key)
+    if hit is not None:
+        return hit
+    ref_wh = (s["ref_img"].shape[1], s["ref_img"].shape[0])
+    models = {}
+    for zc in s["calibration"]["zones"]:
+        data = r2.download_bytes(zc["bank_key"])
+        if data:
+            models[zc["zone"]] = calibration_mod.ZoneModel(s["zones"][zc["zone"]], ref_wh, zc, data)
+    with _calib_models_lock:
+        if len(_calib_models) > 8:
+            _calib_models.clear()
+        _calib_models[key] = models
+    return models
+
+
+def _vis_calibrated(crop, nmap, t_ok, t_def, size=(256, 256)):
+    """Heatmap and outlined-deviation images in the legacy result format."""
+    base = cv2.resize(crop, size)
+    norm = np.clip(nmap / max(t_def, 1e-6), 0, 1.5) / 1.5
+    hm = cv2.applyColorMap((norm * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    hm = cv2.resize(hm, size, interpolation=cv2.INTER_LINEAR)
+    heat = cv2.addWeighted(base, 0.55, hm, 0.45, 0)
+    mask = cv2.resize((nmap > t_ok).astype(np.uint8) * 255, size, interpolation=cv2.INTER_NEAREST)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    out = base.copy()
+    if contours:
+        red = np.zeros_like(out)
+        red[:, :, 2] = mask
+        out = cv2.addWeighted(out, 1.0, red, 0.35, 0)
+        cv2.drawContours(out, contours, -1, (0, 0, 255), 2)
+    return nn_b64(out), nn_b64(heat), len(contours)
+
+
+def nn_b64(img):
+    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    return base64.b64encode(buf.tobytes()).decode()
+
+
+def _check_zone_calibrated(s: dict, photo, from_mobile: bool, photo_path):
+    """Inspection with the recipe's model of normal variation. The zone is
+    found by geometry (homography + coverage); the response has the same
+    shape as the reference-comparison path, so the screens are unchanged."""
+    ref_img, zones = s["ref_img"], s["zones"]
+    if s.get("_ref_sift") is None:
+        s["_ref_sift"] = reference_sift(ref_img)
+    H, _info = estimate_homography(ref_img, photo, ref_sift=s["_ref_sift"])
+    if from_mobile:
+        photo_b64 = base64.b64encode(cv2.imencode(".jpg", photo)[1].tobytes()).decode()
+    else:
+        photo_b64 = _file_to_b64(photo_path)
+    models = _zone_models(s)
+    shares = [0.0] * len(zones)
+    if H is not None:
+        for zi, m in models.items():
+            _, shares[zi] = m.geom.coverage(photo.shape, H)
+    ok_zones = {i for i, info in s["checked"].items()
+                if (info.get("defect_info") or {}).get("status") == "ok"}
+    cands = [zi for zi in models if shares[zi] >= calibration_mod.ZONE_COVERAGE_MIN]
+    cands.sort(key=lambda zi: (zi in ok_zones, -shares[zi]))
+    res = models[cands[0]].inspect(photo, H) if cands else None
+    best = cands[0] if cands else (int(np.argmax(shares)) if shares else 0)
+    result = {
+        "matched": res is not None,
+        "best_zone_index": best,
+        "best_zone_label": zones[best]["label"] if zones else "",
+        "best_score": round(shares[best], 4) if shares else 0.0,
+        "all_scores": [round(x, 4) for x in shares],
+        "photo_b64": photo_b64,
+        "mode": "calibrated",
+    }
+    if res is not None:
+        verdict = {"ok": "OK ✅ — within the normal variation of the good samples",
+                   "warn": "Warning ⚠️ — unusual area, check it",
+                   "defect": "Defect ❌ — outside the normal variation"}[res["status"]]
+        vis_def, vis_heat, n_regions = _vis_calibrated(res["crop"], res["map"], res["t_ok"], res["t_def"])
+        sub_results = []
+        gh, gw = res["map"].shape
+        for sr, (ys, xs) in zip(res["subzones"], models[best].geom.subzone_slices()):
+            sz = zones[best]["subzones"][sr["index"]]
+            ch, cw = res["crop"].shape[:2]
+            sub_crop = res["crop"][int(sz["y"] * ch):int((sz["y"] + sz["h"]) * ch) or 1,
+                                   int(sz["x"] * cw):int((sz["x"] + sz["w"]) * cw) or 1]
+            sd, shm, _ = _vis_calibrated(sub_crop, res["map"][ys, xs], sr["t_ok"], sr["t_def"])
+            ref_crop = _crop_zone(_crop_zone(ref_img, zones[best]), sz)
+            sub_results.append({
+                "index": sr["index"], "label": sr["label"], "sensitivity": None,
+                "status": sr["status"],
+                "verdict": f"{sr['status'].upper()} — score {sr['score']:.2f} (limit {sr['t_ok']:.2f})",
+                "defect_pct": round(100.0 * float((res["map"][ys, xs] > sr["t_ok"]).mean()), 2),
+                "ssim": round(sr["score"], 3),
+                "vis_defects_b64": sd, "vis_heatmap_b64": shm,
+                "extracted_b64": nn_b64(cv2.resize(sub_crop, (256, 256))),
+                "reference_b64": nn_b64(cv2.resize(ref_crop, (256, 256))) if ref_crop.size else "",
+                "anomaly": {"score": sr["score"], "t_ok": sr["t_ok"], "t_def": sr["t_def"]},
+            })
+        status = res["status"]
+        rank = {"ok": 0, "warn": 1, "defect": 2}
+        for sr in sub_results:
+            if rank[sr["status"]] > rank[status]:
+                status = sr["status"]
+                verdict = f"{verdict} (subzone: {sr['label']})"
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        s["checked"][best] = {
+            "score": result["best_score"], "photo_b64": photo_b64,
+            "checked_at": _dt.now(_tz(_td(hours=8))).strftime("%Y-%m-%dT%H:%M:%S.%f"),
+            "operator": _check_auth() or s.get("operator", ""),
+            "zone_sensitivity": None, "subzone_sensitivity": None,
+            "defect_info": {"status": status, "defect_pct": res["area_pct"], "verdict": verdict},
+            "subzone_results": sub_results,
+            "anomaly": {"score": res["score"], "t_ok": res["t_ok"], "t_def": res["t_def"],
+                        "mode": "calibrated"},
+        }
+        result["defect"] = {
+            "status": status, "verdict": verdict,
+            "ssim": round(res["score"], 3), "defect_pct": res["area_pct"],
+            "defect_count": n_regions,
+            "vis_defects_b64": vis_def, "vis_heatmap_b64": vis_heat,
+            "extracted_b64": nn_b64(cv2.resize(res["crop"], (256, 256))),
+            "zone_sensitivity": None, "subzone_sensitivity": None,
+            "anomaly": {"score": res["score"], "t_ok": res["t_ok"], "t_def": res["t_def"]},
+        }
+        if sub_results:
+            result["defect"]["subzones"] = sub_results
+    total = len(zones)
+    done = len(s["checked"])
+    result["progress"] = {"done": done, "total": total, "complete": done >= total}
+    result["checked_zones"] = list(s["checked"].keys())
+    return jsonify(result)
+
+
 def _check_zone_impl(sid, photo_img=None):
     if sid not in sessions:
         return jsonify({"error": "Session not found"}), 404
@@ -1203,6 +1342,10 @@ def _check_zone_impl(sid, photo_img=None):
         photo = cv2.imread(str(photo_path))
         if photo is None:
             return jsonify({"error": "Failed to open photo"}), 400
+
+    if s.get("calibration") and NN_AVAILABLE:
+        return _check_zone_calibrated(s, photo, photo_img is not None,
+                                      None if photo_img is not None else photo_path)
 
     ref_img = s["ref_img"]
     zones = s["zones"]
@@ -1579,6 +1722,8 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
             "zone_sensitivity": info.get("zone_sensitivity"),
             "subzone_sensitivity": info.get("subzone_sensitivity"),
         }
+        if info.get("anomaly"):
+            zone_rec["anomaly"] = info["anomaly"]
         # User decision override
         if i in user_decisions:
             zone_rec["user_decision"] = user_decisions[i]
@@ -2102,6 +2247,8 @@ def load_template(tid):
         "template_name": meta["name"],
         "template_version": version,
         "barcode_mask": meta.get("barcode_mask", ""),
+        # Calibrated recipes inspect with their model of normal variation
+        "calibration": meta.get("calibration"),
         # Strictness comes from the recipe (None → config defaults)
         "zone_sensitivity": meta.get("zone_sensitivity"),
         "subzone_sensitivity": meta.get("subzone_sensitivity"),
@@ -2195,11 +2342,22 @@ def _derived_samples(tid: str, version: dict, kind: str | None = None):
     return [recipes_mod.derive_sample(d, version) for d in docs]
 
 
+def _calib_state(draft: dict, samples: list) -> dict:
+    cal = draft.get("calibration")
+    if not cal:
+        return {"present": False, "fresh": False}
+    return {"present": True,
+            "fresh": cal.get("fingerprint") == calibration_mod.fingerprint(draft, samples),
+            "missed": cal.get("missed", 0), "skipped": cal.get("skipped", []),
+            "margin": cal.get("margin"), "created_at": cal.get("created_at")}
+
+
 def _draft_state(tid: str, draft: dict) -> dict:
     samples = _derived_samples(tid, draft)
     summary = recipes_mod.sample_summary(draft, samples)
-    return {"summary": summary,
-            "check": recipes_mod.publish_check(draft, summary)}
+    cstate = _calib_state(draft, samples) if NN_AVAILABLE else None
+    return {"summary": summary, "calibration_state": cstate,
+            "check": recipes_mod.publish_check(draft, summary, cstate)}
 
 
 @app.route("/studio")
@@ -2526,6 +2684,109 @@ def studio_rollback(tid, ver):
         return jsonify({"error": f"v{ver} is not an archived version"}), 404
     _activate(tid, v)
     return jsonify({"status": "ok", "version": ver})
+
+
+# ─── Calibration ─────────────────────────────────────────────────────────────
+
+_calib_jobs: dict[str, dict] = {}     # recipe id → {state, message, ...}
+_calib_jobs_lock = threading.Lock()
+
+
+def _run_calibration(tid: str, user: str):
+    job = _calib_jobs[tid]
+    try:
+        draft = _draft_of(tid)
+        samples = _derived_samples(tid, draft)
+
+        def load_photo(sm):
+            data = r2.download_bytes(sm["photo_key"])
+            return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+
+        def progress(msg):
+            job["message"] = msg
+
+        old = draft.get("calibration") or {}
+        cal, blobs = calibration_mod.calibrate(
+            draft, samples, load_photo, progress,
+            margin=old.get("margin") or calibration_mod.MARGIN_DEFAULT)
+        for z in cal["zones"]:
+            key = f"{_r2_tpl_prefix(tid)}v{draft['version']}/calib/zone_{z['zone']}.npz"
+            r2.upload_bytes(key, blobs[z["zone"]], "application/octet-stream")
+            z["bank_key"] = key
+        cal["fingerprint"] = calibration_mod.fingerprint(draft, samples)
+        cal["created_at"] = recipes_mod.now_iso()
+        cal["created_by"] = user
+        _versions_col.update_one({"recipe_id": tid, "version": draft["version"]},
+                                 {"$set": {"calibration": cal}})
+        job.update(state="done", message="Calibration finished", finished=time.time())
+    except Exception as e:  # report to the UI, keep the service alive
+        app.logger.exception("Calibration failed for %s", tid)
+        job.update(state="error", message=f"Calibration failed: {e}", finished=time.time())
+
+
+@app.route("/api/recipes/<tid>/calibrate", methods=["POST"])
+def studio_calibrate(tid):
+    """Start calibration of the draft in the background."""
+    err = _studio_guard()
+    if err:
+        return err
+    if not NN_AVAILABLE:
+        return jsonify({"error": "Neural engine unavailable"}), 503
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    if not draft:
+        return jsonify({"error": "No draft"}), 404
+    if not draft.get("ref_image") or not draft.get("zones"):
+        return jsonify({"error": "Add a reference and zones first"}), 400
+    with _calib_jobs_lock:
+        job = _calib_jobs.get(tid)
+        if job and job["state"] == "running":
+            return jsonify({"status": "running", "job": job}), 202
+        _calib_jobs[tid] = job = {"state": "running", "message": "Starting",
+                                  "started": time.time()}
+    threading.Thread(target=_run_calibration,
+                     args=(tid, getattr(request, "auth_user", "")),
+                     daemon=True, name=f"calib-{tid}").start()
+    return jsonify({"status": "started", "job": job}), 202
+
+
+@app.route("/api/recipes/<tid>/calibrate", methods=["GET"])
+def studio_calibration_status(tid):
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    if not draft:
+        return jsonify({"error": "No draft"}), 404
+    state = _draft_state(tid, draft)
+    return jsonify({"job": _calib_jobs.get(tid), "calibration": draft.get("calibration"),
+                    "margin_range": calibration_mod.MARGIN_RANGE,
+                    "defect_band": calibration_mod.DEFECT_BAND, **state})
+
+
+@app.route("/api/recipes/<tid>/draft/calibration", methods=["PUT"])
+def studio_set_strictness(tid):
+    """Change the margin (strictness) of an existing calibration."""
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    if not draft or not draft.get("calibration"):
+        return jsonify({"error": "Calibrate first"}), 404
+    try:
+        margin = float((request.get_json(silent=True) or {}).get("margin"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "margin must be a number"}), 400
+    cal = calibration_mod.apply_margin(draft["calibration"], margin)
+    _versions_col.update_one({"recipe_id": tid, "version": draft["version"]},
+                             {"$set": {"calibration": cal}})
+    draft["calibration"] = cal
+    return jsonify({"status": "ok", "calibration": cal, **_draft_state(tid, draft)})
 
 
 # ─── Samples ─────────────────────────────────────────────────────────────────

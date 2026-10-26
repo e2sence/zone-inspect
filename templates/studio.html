@@ -137,12 +137,17 @@
 
                         <!-- 6 Calibrate -->
                         <div class="card st-step" data-step="6">
-                            <h3 class="st-h3">6 · Calibrate</h3>
-                            <p class="st-muted">Calibration builds a model of normal variation from your good samples and checks
-                                it against your defect samples. It arrives in a later release; until then this recipe
-                                inspects with the reference comparison and the strictness from step 1. The samples you
-                                collect now will be used as soon as calibration is available.</p>
-                            <div id="calib-summary"></div>
+                            <div class="st-row st-between">
+                                <h3 class="st-h3">6 · Calibrate</h3>
+                                <div class="st-row"><span id="calib-status"></span>
+                                    <button class="btn btn-sm" id="btn-calibrate">Calibrate</button></div>
+                            </div>
+                            <p class="st-hint">Calibration learns what normal variation looks like from your good samples and
+                                checks every defect sample against it. Each good sample is compared with all the others, so the
+                                report shows how many false alarms to expect on good boards. A defect is <b>caught</b> when its
+                                score is above the OK limit. Takes from several seconds to a minute.</p>
+                            <p class="st-hint" id="calib-job"></p>
+                            <div id="calib-report"></div>
                         </div>
 
                         <!-- 7 Publish -->

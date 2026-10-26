@@ -92,3 +92,21 @@ a.st-link#back-to-list { border: none; padding-left: 0; }
 .st-lb-wrap canvas { display: block; cursor: crosshair; }
 .st-lb-list { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
 .st-lb-list li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* calibration report */
+.cal-dist { position: relative; height: 26px; min-width: 180px; border-left: 1px solid var(--border-light); border-bottom: 1px solid var(--border-light); }
+.cal-dist i { position: absolute; bottom: 0; width: 3px; height: 70%; border-radius: 1px; }
+.cal-dist i.g { background: rgba(46, 160, 67, .8); }
+.cal-dist i.d { background: rgba(248, 81, 73, .9); height: 100%; }
+.cal-dist .t { position: absolute; top: -2px; bottom: 0; width: 0; }
+.cal-dist .t.ok { border-left: 2px dashed var(--accent); }
+.cal-dist .t.def { border-left: 2px dashed var(--warn); }
+.cal-sub td:first-child { padding-left: 22px; color: var(--muted); }
+.cal-slider { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0; font-size: 12px; }
+.cal-slider input[type=range] { flex: 1 1 220px; accent-color: var(--accent); }
+.cal-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin: 6px 0; }
+.cal-legend span::before { content: ""; display: inline-block; width: 10px; height: 8px; margin-right: 4px; vertical-align: 0; }
+.cal-legend .lg::before { background: rgba(46, 160, 67, .8); }
+.cal-legend .ld::before { background: rgba(248, 81, 73, .9); }
+.cal-legend .lo::before { border-left: 2px dashed var(--accent); width: 0; }
+.cal-legend .lw::before { border-left: 2px dashed var(--warn); width: 0; }

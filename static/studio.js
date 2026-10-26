@@ -198,6 +198,8 @@
         if (!state || !draft) return;
         if (state.summary) draft.summary = state.summary;
         if (state.check) draft.check = state.check;
+        if ('calibration_state' in state) draft.calibration_state = state.calibration_state;
+        if (state.calibration) draft.calibration = state.calibration;
     }
 
     async function refreshSamples() {
@@ -220,12 +222,13 @@
             case 4: return s.zones.length > 0 && s.zones.every(z => z.good >= MIN_GOOD);
             case 5: return s.zones.length > 0 && s.zones.every(z => z.defect >= MIN_DEFECT &&
                 z.critical_subzones.every(c => c.defects >= 1));
+            case 6: { const c = draft.calibration_state || {}; return !!(c.present && c.fresh && !c.missed && !(c.skipped || []).length); }
             case 7: return false;
             default: return false;
         }
     }
     function firstIncompleteStep() {
-        for (const n of [1, 2, 3, 4, 5]) if (!stepDone(n)) return n;
+        for (const n of [1, 2, 3, 4, 5, 6]) if (!stepDone(n)) return n;
         return 7;
     }
 
@@ -254,6 +257,7 @@
         renderCalibration();
         renderPublish();
         if (step === 4 || step === 5) startPoll(); else stopPoll();
+        if (step === 6) loadCalibration();
     }
 
     // 1 · Details
@@ -530,13 +534,129 @@
     }
     function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
-    // 6 · Calibrate (summary only in this release)
+    // 6 · Calibrate
+    let calibPoll = null;
+    let calibMargin = null;      // slider value (not yet saved)
+
+    async function loadCalibration() {
+        try {
+            const d = await api(`/api/recipes/${rec.id}/calibrate`);
+            applyState(d);
+            draft.calibration = d.calibration;
+            const running = d.job && d.job.state === 'running';
+            $('calib-job').textContent = d.job ? (running ? `Running: ${d.job.message}…` :
+                d.job.state === 'error' ? d.job.message : '') : '';
+            $('btn-calibrate').disabled = running;
+            if (running && !calibPoll) calibPoll = setInterval(loadCalibration, 1500);
+            if (!running && calibPoll) {
+                clearInterval(calibPoll); calibPoll = null;
+                if (d.job.state === 'done') toast('Calibration finished', 'success');
+                if (d.job.state === 'error') toast(d.job.message, 'error');
+            }
+            renderCalibration();
+            renderTabs();
+            renderPublish();
+        } catch (e) { toast(e.message, 'error'); }
+    }
+
+    $('btn-calibrate').addEventListener('click', async () => {
+        try {
+            await api(`/api/recipes/${rec.id}/calibrate`, { method: 'POST' });
+            $('calib-job').textContent = 'Running: starting…';
+            $('btn-calibrate').disabled = true;
+            if (!calibPoll) calibPoll = setInterval(loadCalibration, 1500);
+        } catch (e) { toast(e.message, 'error'); }
+    });
+
+    // Same rules as calibration.apply_margin, for live feedback while sliding
+    function outcomes(cal, m) {
+        const band = 1.25;
+        return cal.zones.map(z => {
+            const tOk = Math.max(...z.good_scores) * m, tDef = tOk * band;
+            const subs = z.subzones.map((sz, j) => {
+                const sOk = Math.max(...sz.good_scores) * m;
+                const mine = z.defects.filter(d => d.subzone === j);
+                return { ...sz, t_ok: sOk, t_def: sOk * band, fa: sz.good_scores.filter(x => x > sOk).length,
+                    n: mine.length, caught: mine.filter(d => d.sub_scores[j] > sOk).length,
+                    dscores: mine.map(d => d.sub_scores[j]) };
+            });
+            return { ...z, t_ok: tOk, t_def: tDef, fa: z.good_scores.filter(x => x > tOk).length,
+                caught: z.defects.filter(d => d.score > tOk).length,
+                atDefect: z.defects.filter(d => d.score > tDef).length,
+                inBox: z.defects.filter(d => d.in_box).length,
+                minMargin: z.defects.length ? Math.min(...z.defects.map(d => d.score)) / tOk : null, subs };
+        });
+    }
+
+    function dist(goods, defs, tOk, tDef) {
+        const top = Math.max(tDef, ...goods, ...defs) * 1.08 || 1;
+        const x = v => `${Math.min(99.5, 100 * v / top).toFixed(2)}%`;
+        return `<div class="cal-dist">${goods.map(v => `<i class="g" style="left:${x(v)}"></i>`).join('')}
+            ${defs.map(v => `<i class="d" style="left:${x(v)}"></i>`).join('')}
+            <span class="t ok" style="left:${x(tOk)}"></span><span class="t def" style="left:${x(tDef)}"></span></div>`;
+    }
+
     function renderCalibration() {
         if (!draft) return;
-        const s = draft.summary || { zones: [] };
-        $('calib-summary').innerHTML = `<div class="st-table-wrap"><table class="data-table"><thead><tr><th>Zone</th><th>Good</th><th>Defect</th><th>Critical subzones</th></tr></thead><tbody>
-            ${s.zones.map(z => `<tr><td>${esc(z.label)}</td><td>${z.good}</td><td>${z.defect}</td><td>${z.critical_subzones.map(c => `${esc(c.label)}: ${c.defects}`).join(', ') || '—'}</td></tr>`).join('')}
-        </tbody></table></div>`;
+        const c = draft.calibration_state || {};
+        $('calib-status').innerHTML = !c.present ? '<span class="chip warn">Not calibrated</span>'
+            : !c.fresh ? '<span class="chip warn">Out of date</span>'
+            : c.missed ? '<span class="chip bad">Misses defects</span>' : '<span class="chip ok">Up to date</span>';
+        $('btn-calibrate').textContent = c.present ? 'Recalibrate' : 'Calibrate';
+        const cal = draft.calibration;
+        if (!cal || !cal.zones) { $('calib-report').innerHTML = ''; return; }
+        const m = calibMargin ?? cal.margin;
+        const zs = outcomes(cal, m);
+        const totFa = zs.reduce((a, z) => a + z.fa, 0), totGood = zs.reduce((a, z) => a + z.good_scores.length, 0);
+        const totDef = zs.reduce((a, z) => a + z.defects.length, 0), totCaught = zs.reduce((a, z) => a + z.caught, 0);
+        const critMiss = zs.some(z => z.subs.some(sz => sz.critical && sz.caught < sz.n));
+        const ok = totCaught === totDef && !critMiss;
+        const rows = zs.map(z => `
+            <tr><td class="name">${esc(z.label)}</td><td>${z.good_scores.length}</td><td>${z.defects.length}</td>
+                <td>${dist(z.good_scores, z.defects.map(d => d.score), z.t_ok, z.t_def)}</td>
+                <td><span class="chip ${z.fa ? 'warn' : 'ok'}">${z.fa} / ${z.good_scores.length}</span></td>
+                <td><span class="chip ${z.caught === z.defects.length ? 'ok' : 'bad'}">${z.caught} / ${z.defects.length}</span>
+                    ${z.atDefect !== z.caught ? `<span class="st-muted">${z.atDefect} as DEFECT</span>` : ''}</td>
+                <td>${z.minMargin ? '×' + z.minMargin.toFixed(2) : '—'}</td>
+                <td>${z.defects.length ? `${z.inBox} / ${z.defects.length}` : '—'}</td></tr>
+            ${z.subs.map(sz => `<tr class="cal-sub"><td>${esc(sz.label)}${sz.critical ? ' <span class="chip warn">critical</span>' : ''}</td>
+                <td>${sz.good_scores.length}</td><td>${sz.n}</td><td>${dist(sz.good_scores, sz.dscores, sz.t_ok, sz.t_def)}</td>
+                <td><span class="chip ${sz.fa ? 'warn' : 'ok'}">${sz.fa} / ${sz.good_scores.length}</span></td>
+                <td>${sz.n ? `<span class="chip ${sz.caught === sz.n ? 'ok' : (sz.critical ? 'bad' : 'warn')}">${sz.caught} / ${sz.n}</span>` : '—'}</td>
+                <td></td><td></td></tr>`).join('')}`).join('');
+        const skipped = (cal.skipped || []).map(sk => `<li>${esc(sk.label)}: ${esc(sk.reason)}</li>`).join('');
+        const changed = calibMargin !== null && Math.abs(calibMargin - cal.margin) > 1e-6;
+        $('calib-report').innerHTML = `
+            <div class="st-row" style="margin:8px 0">
+                <span class="chip ${totFa ? 'warn' : 'ok'}">False alarms on good samples: ${totFa} / ${totGood}</span>
+                <span class="chip ${ok ? 'ok' : 'bad'}">Defects caught: ${totCaught} / ${totDef}</span>
+                <span class="st-muted">calibrated ${fmtDate(cal.created_at)}${cal.created_by ? ' · ' + esc(cal.created_by) : ''}</span>
+            </div>
+            ${skipped ? `<ul class="st-list bad">${skipped}</ul>` : ''}
+            <div class="cal-slider">
+                <span class="st-muted">Stricter</span>
+                <input type="range" id="cal-margin" min="${(draft.margin_range || [0.9, 1.8])[0]}" max="${(draft.margin_range || [0.9, 1.8])[1]}" step="0.01" value="${m}" aria-label="Strictness">
+                <span class="st-muted">Looser</span>
+                <b>OK limit = worst good × ${m.toFixed(2)}</b>
+                <button class="btn btn-sm" id="cal-save" ${changed ? '' : 'disabled'}>Save strictness</button>
+            </div>
+            ${!ok ? '<p class="st-hint" style="color:var(--danger)">At this strictness some defect samples pass as OK. Move the slider towards Stricter, add good samples so the normal variation is clearer, or check the defect labels.</p>' : ''}
+            <div class="cal-legend"><span class="lg">good samples (each vs the others)</span><span class="ld">defect samples</span>
+                <span class="lo">OK limit</span><span class="lw">DEFECT limit (WARN between)</span></div>
+            <div class="st-table-wrap"><table class="data-table st-table"><thead><tr>
+                <th>Zone</th><th>Good</th><th>Defect</th><th>Scores</th><th>False alarms</th><th>Caught</th><th>Margin</th><th>Found in box</th>
+            </tr></thead><tbody>${rows}</tbody></table></div>`;
+        $('cal-margin').addEventListener('input', e => { calibMargin = parseFloat(e.target.value); renderCalibration(); });
+        $('cal-save').addEventListener('click', async () => {
+            try {
+                const d = await api(`/api/recipes/${rec.id}/draft/calibration`, { method: 'PUT', json: { margin: calibMargin } });
+                draft.calibration = d.calibration;
+                applyState(d);
+                calibMargin = null;
+                toast('Strictness saved', 'success');
+                renderCalibration(); renderTabs(); renderPublish();
+            } catch (err) { toast(err.message, 'error'); }
+        });
     }
 
     // 7 · Publish

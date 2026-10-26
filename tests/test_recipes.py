@@ -152,8 +152,23 @@ def _add(client, tid, photo, kind, device, board_no):
     return r.get_json()
 
 
-def _ready_recipe(client, board, zone_sens=None):
-    """Recipe with reference, one zone, 15 good + 2 labelled defect samples."""
+def _calibrate(client, tid, timeout=180):
+    import time
+    r = client.post(f"/api/recipes/{tid}/calibrate")
+    assert r.status_code == 202, r.get_json()
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        st = client.get(f"/api/recipes/{tid}/calibrate").get_json()
+        if st["job"]["state"] != "running":
+            assert st["job"]["state"] == "done", st["job"]
+            return st
+        time.sleep(0.5)
+    raise AssertionError("calibration did not finish")
+
+
+def _ready_recipe(client, board, zone_sens=None, calibrate=True):
+    """Recipe with reference, one zone, 15 good + 2 labelled defect samples
+    (calibrated unless calibrate=False)."""
     tid = _new_recipe(client)
     _upload_reference(client, tid, board)
     upd = {"zones": [ZONE]}
@@ -171,6 +186,8 @@ def _ready_recipe(client, board, zone_sens=None):
         r = client.patch(f"/api/samples/{sid}",
                          json={"defects": [{"box": box, "type": "wrong_part"}]})
         assert r.status_code == 200
+    if calibrate:
+        _calibrate(client, tid)
     return tid
 
 
@@ -277,11 +294,13 @@ class TestRecipeLifecycle:
 class TestRecipeStrictness:
     def test_operator_cannot_override_recipe_sensitivity(
             self, mongo, nn, flask_app, authed_client, board):
-        tid = _ready_recipe(authed_client, board, zone_sens=1.9)
+        # reference-comparison (uncalibrated) recipe: strictness applies
+        tid = _ready_recipe(authed_client, board, zone_sens=1.9, calibrate=False)
         # give the recipe to line1 so the operator can see it
         import app as app_module
         app_module._templates_col.update_one({"id": tid}, {"$set": {"group": "line1"}})
-        authed_client.post(f"/api/recipes/{tid}/publish")
+        assert authed_client.post(f"/api/recipes/{tid}/publish",
+                                  json={"force": True}).status_code == 200
         photo = shoot(board, ZONE)
         with flask_app.test_client() as op:
             op.set_cookie("pcb_auth_key", "test-operator-key-2222")
@@ -338,3 +357,49 @@ class TestSharedRecipes:
             lead.set_cookie("pcb_auth_key", "test-lead-key-1111")      # line1
             # editing a shared recipe is for admins
             assert lead.get("/api/recipes/shared01").status_code == 404
+
+
+@pytest.mark.mongo
+class TestCalibration:
+    def test_publish_needs_fresh_calibration(self, mongo, nn, authed_client, board):
+        tid = _ready_recipe(authed_client, board, calibrate=False)
+        r = authed_client.post(f"/api/recipes/{tid}/publish")
+        assert r.status_code == 409
+        assert any("Not calibrated" in b for b in r.get_json()["check"]["blockers"])
+        st = _calibrate(authed_client, tid)
+        z = st["calibration"]["zones"][0]
+        assert z["n_good"] == 15 and z["caught"] == 2 and z["false_alarms"] == 0
+        assert st["check"]["ok"], st["check"]
+        # excluding a sample makes the calibration stale
+        sid = authed_client.get(f"/api/recipes/{tid}/samples?kind=good").get_json()["samples"][0]["id"]
+        authed_client.patch(f"/api/samples/{sid}", json={"excluded": True})
+        st = authed_client.get(f"/api/recipes/{tid}/draft/state").get_json()
+        assert any("out of date" in b for b in st["check"]["blockers"])
+
+    def test_strictness_slider_recomputes_thresholds(self, mongo, nn, authed_client, board):
+        tid = _ready_recipe(authed_client, board)
+        cal = authed_client.get(f"/api/recipes/{tid}/calibrate").get_json()["calibration"]
+        r = authed_client.put(f"/api/recipes/{tid}/draft/calibration", json={"margin": 1.5}).get_json()
+        assert r["calibration"]["zones"][0]["t_ok"] > cal["zones"][0]["t_ok"]
+        assert r["calibration"]["margin"] == 1.5
+
+    def test_calibrated_inspection(self, mongo, nn, authed_client, board):
+        tid = _ready_recipe(authed_client, board)
+        assert authed_client.post(f"/api/recipes/{tid}/publish").status_code == 200
+        sid = authed_client.get(f"/api/templates/{tid}").get_json()["session_id"]
+
+        def check(photo):
+            import app as app_module
+            app_module.sessions[sid]["checked"] = {}
+            return authed_client.post(f"/api/session/{sid}/check",
+                                      data={"photo": (io.BytesIO(photo), "p.jpg")},
+                                      content_type="multipart/form-data").get_json()
+        good = check(shoot(board, ZONE, quality=87, brightness=7))
+        assert good["mode"] == "calibrated" and good["matched"]
+        assert good["defect"]["status"] == "ok", good["defect"]["anomaly"]
+        bad = check(shoot(board, ZONE, defect=True, quality=86))
+        assert bad["defect"]["status"] in ("warn", "defect")
+        rid = authed_client.post(f"/api/session/{sid}/save_result", json={}).get_json()["result_id"]
+        import app as app_module
+        rec = app_module._results_col.find_one({"result_id": rid})
+        assert rec["zones"][0]["anomaly"]["mode"] == "calibrated"

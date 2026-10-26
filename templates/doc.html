@@ -552,8 +552,8 @@
                             <li><strong>4 Good samples:</strong> photos of known-good boards.</li>
                             <li><strong>5 Defect samples:</strong> photos of boards with known defects, each labelled
                                 with a box.</li>
-                            <li><strong>6 Calibrate:</strong> arrives in a later release; samples collected now will be
-                                used then.</li>
+                            <li><strong>6 Calibrate:</strong> builds the model of normal variation and shows the
+                                report (see below).</li>
                             <li><strong>7 Publish:</strong> shows what blocks publishing and makes the draft live.</li>
                         </ul>
                         <h4>Samples</h4>
@@ -566,12 +566,26 @@
                             aligned photo; zone and subzone are detected from the box. Labels survive later zone
                             edits. Defect types: missing, wrong part, shifted, rotated, contamination, damage,
                             other.</p>
+                        <h4>Calibration</h4>
+                        <p>Click <strong>Calibrate</strong> in step 6. For every zone the system learns what normal
+                            variation looks like from the good samples (differences between boards, phones, light) and
+                            checks each defect sample against it. Every good sample is compared with all the others, so
+                            the report shows how many false alarms to expect on good boards; a defect is
+                            <span class="kw">caught</span> when its score is above the OK limit, and the report shows
+                            whether the strongest deviation lies inside the box you drew.</p>
+                        <p>The OK limit is the worst good sample × the strictness factor (default 1.10). Between the OK
+                            limit and 1.25 × that limit the result is WARN, above it DEFECT. Subzones get their own
+                            limits. Move the strictness slider to see the effect at once, then <strong>Save
+                            strictness</strong>. Changing samples, zones or the reference makes the calibration out of
+                            date: recalibrate before publishing.</p>
                         <h4>Requirements for publishing</h4>
                         <ul>
                             <li>At least 15 good samples for every zone.</li>
                             <li>At least 2 defect samples for every zone, and 1 for every critical subzone.</li>
                             <li>Samples from at least 2 different phones.</li>
                             <li>A reference that passed the quality check, and at least one zone.</li>
+                            <li>An up-to-date calibration in which every defect sample is caught (and every critical
+                                subzone catches its defects).</li>
                         </ul>
                         <p>Fewer than 3 different good boards is a warning. A lead publishes on their own once
                             nothing blocks; an admin may publish with unmet requirements.</p>
@@ -654,6 +668,13 @@
                         <h4>Subzone Analysis</h4>
                         <p>If the zone has subzones defined, each subzone is analyzed separately with stricter
                             thresholds. The zone status = worst of (zone result, all subzone results).</p>
+                        <h4>Calibrated recipes</h4>
+                        <p>A recipe published with a calibration is inspected with its model of normal variation: the
+                            zone is found from the photo's alignment to the reference (no similarity threshold), and the
+                            result is OK / WARN / DEFECT from the calibrated limits. The heatmap shows where the photo
+                            differs from all good samples. Parts of the zone outside the photo are ignored; at least 90%
+                            of the zone must be in the frame. Recipes without calibration are inspected by comparison
+                            with the reference as before.</p>
                         <h4>Strictness and recipe version</h4>
                         <p>Thresholds come from the recipe's strictness (see section 1). The recipe badge shows the
                             version in use, and the lead's notes for operators appear under it. Each saved result
@@ -1174,8 +1195,7 @@ curl -s "$HOST/api/v1/results"
                             <li><strong>4 Good samples:</strong> фото заведомо исправных плат.</li>
                             <li><strong>5 Defect samples:</strong> фото плат с известными дефектами, каждый отмечен
                                 рамкой.</li>
-                            <li><strong>6 Calibrate:</strong> появится в следующем релизе; собранные сейчас образцы
-                                будут использованы.</li>
+                            <li><strong>6 Calibrate:</strong> строит модель нормы и показывает отчёт (см. ниже).</li>
                             <li><strong>7 Publish:</strong> показывает, что мешает публикации, и выпускает черновик на
                                 линию.</li>
                         </ul>
@@ -1190,12 +1210,26 @@ curl -s "$HOST/api/v1/results"
                             последующей правке зон. Типы дефектов: missing (нет компонента), wrong part (чужой),
                             shifted (смещён), rotated (повёрнут), contamination (загрязнение), damage (повреждение),
                             other.</p>
+                        <h4>Калибровка</h4>
+                        <p>Нажмите <strong>Calibrate</strong> на шаге 6. Для каждой зоны система узнаёт по хорошим
+                            образцам, как выглядит нормальный разброс (разные платы, телефоны, свет), и проверяет
+                            каждый дефектный образец. Каждый хороший образец сравнивается со всеми остальными, поэтому
+                            отчёт показывает, сколько ложных тревог ждать на исправных платах; дефект
+                            <span class="kw">пойман</span>, если его оценка выше порога OK, и отчёт показывает,
+                            попало ли самое сильное отклонение в нарисованную рамку.</p>
+                        <p>Порог OK — худший хороший образец × коэффициент строгости (по умолчанию 1.10). Между
+                            порогом OK и 1.25 × порог — WARN, выше — DEFECT. У подзон свои пороги. Сдвиньте ползунок
+                            строгости, чтобы сразу увидеть эффект, затем <strong>Save strictness</strong>. Изменение
+                            образцов, зон или эталона делает калибровку устаревшей: перед публикацией откалибруйте
+                            заново.</p>
                         <h4>Требования для публикации</h4>
                         <ul>
                             <li>Не меньше 15 хороших образцов на каждую зону.</li>
                             <li>Не меньше 2 дефектных образцов на каждую зону и 1 на каждую критичную подзону.</li>
                             <li>Образцы минимум с 2 разных телефонов.</li>
                             <li>Эталон прошёл проверку качества, есть хотя бы одна зона.</li>
+                            <li>Актуальная калибровка, в которой пойманы все дефектные образцы (и каждая критичная
+                                подзона ловит свои дефекты).</li>
                         </ul>
                         <p>Меньше 3 разных исправных плат — предупреждение. Ведущий публикует сам, когда ничего не
                             блокирует; админ может опубликовать и с невыполненными требованиями.</p>
@@ -1283,6 +1317,12 @@ curl -s "$HOST/api/v1/results"
                         <p>После каждой проверки: 5 изображений (вход, эталон, вырезка, карта дефектов, тепловая карта),
                             статистика, столбчатая диаграмма оценок всех зон, подзоны (если есть). Клик по изображению —
                             полноразмерный просмотр в лайтбоксе.</p>
+                        <h4>Откалиброванные рецепты</h4>
+                        <p>Рецепт, опубликованный с калибровкой, проверяется по модели нормы: зона находится по
+                            выравниванию фото на эталон (без порога похожести), результат OK / WARN / DEFECT — по
+                            порогам калибровки. Тепловая карта показывает, где фото отличается от всех хороших образцов.
+                            Части зоны вне кадра не учитываются; в кадре должно быть не меньше 90% зоны. Рецепты без
+                            калибровки проверяются сравнением с эталоном, как раньше.</p>
                         <h4>Строгость и версия рецепта</h4>
                         <p>Пороги берутся из строгости рецепта (см. раздел 1). На плашке рецепта видна используемая
                             версия, под ней — заметки ведущего для операторов. Каждый сохранённый результат хранит

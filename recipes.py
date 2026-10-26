@@ -24,7 +24,7 @@ STATUS_ARCHIVED = "archived"
 # Fields copied from a version onto the recipe document when it goes live
 MIRROR_FIELDS = ("name", "barcode_mask", "zones", "ref_image",
                  "zone_sensitivity", "subzone_sensitivity",
-                 "shooting_plan", "operator_notes")
+                 "shooting_plan", "operator_notes", "calibration")
 
 # Sample requirements (user decisions 2026-10-26)
 MIN_GOOD_PER_ZONE = 15
@@ -116,6 +116,8 @@ def new_draft(tid: str, version: int, base: dict | None, user: str) -> dict:
         "subzone_sensitivity": base.get("subzone_sensitivity"),
         "shooting_plan": base.get("shooting_plan", "zones"),
         "operator_notes": base.get("operator_notes", ""),
+        # Still valid while the fingerprint matches (same reference, zones, samples)
+        "calibration": base.get("calibration"),
         "created_at": now_iso(),
         "created_by": user,
         "parent": base.get("version"),
@@ -311,10 +313,21 @@ def sample_summary(version: dict, samples: list[dict]) -> dict:
             "defect_total": sum(1 for s in active if s["kind"] == "defect")}
 
 
-def publish_check(version: dict, summary: dict) -> dict:
+def publish_check(version: dict, summary: dict, calib_state: dict | None = None) -> dict:
     """What blocks publishing and what only warns.
-    blockers/warnings are English strings for the Studio UI."""
+    blockers/warnings are English strings for the Studio UI.
+    calib_state (from the app): {"present", "fresh", "missed", "skipped"}."""
     blockers, warnings = [], []
+    if calib_state is not None:
+        if not calib_state.get("present"):
+            blockers.append("Not calibrated: run calibration in step 6")
+        elif not calib_state.get("fresh"):
+            blockers.append("Calibration is out of date (samples, zones or reference changed): recalibrate in step 6")
+        else:
+            if calib_state.get("missed"):
+                blockers.append("Some defect samples are not caught at the chosen strictness (step 6)")
+            for sk in calib_state.get("skipped", []):
+                blockers.append(f"{sk['label']} not calibrated: {sk['reason']}")
     if not version.get("ref_image"):
         blockers.append("No reference image")
     elif (version.get("ref_quality") or {}).get("level") == "bad":
