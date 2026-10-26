@@ -295,7 +295,7 @@
     function renderReference(src, quality) {
         $('ref-preview').classList.toggle('hidden', !src);
         $('ref-empty').classList.toggle('hidden', !!src);
-        if (src) $('ref-preview').src = src;
+        if (src) { $('ref-preview').src = src; $('ref-preview').dataset.zoom = src; }
         const q = quality;
         $('ref-quality').innerHTML = !q ? '' :
             `<div class="st-row"><span class="chip ${q.level === 'ok' ? 'ok' : q.level === 'warn' ? 'warn' : 'bad'}">Quality: ${q.level.toUpperCase()}</span>
@@ -383,14 +383,16 @@
         const stale = s.stale ? `<div class="st-confirm">${s.stale} sample(s) were aligned to an older reference and are not counted.
             <button class="btn btn-sm" data-realign>Re-align now</button></div>` : '';
         const intro = good
-            ? `Photograph known-good boards the way operators will: hand-held, normal light, from at least
-               ${2} different phones and ${3}+ boards. Each photo is aligned to the reference automatically.`
+            ? `Photograph known-good boards the way operators will: hand-held, normal light, from a consistent
+               position and angle, with at least 2 different phones and 3+ boards. Each photo is aligned to the
+               reference automatically. Click a thumbnail to see the photo.`
             : `Photograph boards with known defects: real rejects or prepared ones (missing part, marker dot,
-               tape strip, wrong part). Then open each photo and draw a box around the defect.`;
+               tape strip, wrong part), from the same position and angle as the good samples. Then label each photo:
+               draw a box around the defect.`;
 
         el.innerHTML = `
             <h3 class="st-h3">${n} · ${good ? 'Good samples' : 'Defect samples'}</h3>
-            <p class="st-hint" style="margin-bottom:10px">${intro}</p>
+            <details class="st-help"><summary>?</summary>${intro}</details>
             <div class="st-capture">
                 <div class="st-panel st-qr">
                     <button class="btn btn-sm" data-qr>Connect a phone</button>
@@ -449,7 +451,8 @@
                 : '<span class="chip bad">not labelled</span>');
         }
         return `<div class="st-thumb${x.excluded ? ' excluded' : ''}">
-            <img src="/api/samples/${esc(x.id)}/image?size=thumb" alt="Sample photo" loading="lazy">
+            <img src="/api/samples/${esc(x.id)}/image?size=thumb" data-zoom="/api/samples/${esc(x.id)}/image?size=view"
+                data-caption="${esc(x.kind)} · ${esc(x.device || '')}${x.board ? ' · board ' + esc(x.board) : ''}" alt="Sample photo" loading="lazy">
             <div class="meta"><div class="chips">${chips.join('')}</div>
                 <span class="st-muted">${esc(x.device || 'phone not named')}${x.board ? ' · board ' + esc(x.board) : ''}</span></div>
             <div class="acts">
@@ -538,6 +541,8 @@
     function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
     // 6 · Calibrate
+    // While a calibration runs only the job is polled and only the progress
+    // bar changes; the report is loaded once when the job ends.
     let calibPoll = null;
     let calibEdits = {};         // zone index → OK limit being edited (not yet saved)
 
@@ -550,16 +555,24 @@
             showCalibRun(running ? d.job : null);
             $('calib-job').textContent = d.job && d.job.state === 'error' ? d.job.message : '';
             $('btn-calibrate').disabled = running;
-            if (running && !calibPoll) calibPoll = setInterval(loadCalibration, 1000);
-            if (!running && calibPoll) {
-                clearInterval(calibPoll); calibPoll = null;
-                if (d.job.state === 'done') { calibEdits = {}; toast('Calibration finished', 'success'); }
-                if (d.job.state === 'error') toast(d.job.message, 'error');
-            }
+            if (running) startCalibPoll();
             renderCalibration();
             renderTabs();
             renderPublish();
         } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function startCalibPoll() {
+        if (calibPoll) return;
+        calibPoll = setInterval(async () => {
+            let job;
+            try { job = (await api(`/api/recipes/${rec.id}/calibrate?job=1`)).job; } catch (e) { return; }
+            if (job && job.state === 'running') { showCalibRun(job); return; }
+            clearInterval(calibPoll); calibPoll = null;
+            if (job && job.state === 'done') { calibEdits = {}; toast('Calibration finished', 'success'); }
+            if (job && job.state === 'error') toast(job.message, 'error');
+            loadCalibration();
+        }, 1000);
     }
 
     $('btn-calibrate').addEventListener('click', async () => {
@@ -568,7 +581,7 @@
             showCalibRun({ progress: 0, message: 'Starting', elapsed: 0 });
             $('calib-job').textContent = '';
             $('btn-calibrate').disabled = true;
-            if (!calibPoll) calibPoll = setInterval(loadCalibration, 1000);
+            startCalibPoll();
         } catch (e) { toast(e.message, 'error'); }
     });
 
@@ -591,6 +604,7 @@
     // A zone's OK limit is the value being edited, else its saved margin × worst good score.
     const worstOf = a => a.length ? Math.max(...a) : 0;
     const r2 = v => Math.round(v * 100) / 100;
+    const f2 = v => v == null ? '—' : v.toFixed(2);
 
     function zoneMargin(cal, z) {
         const w = worstOf(z.good_scores);
@@ -612,95 +626,73 @@
             });
             return { ...z, m, t_ok: tOk, t_def: tDef, fa: z.good_scores.filter(x => x > tOk).length,
                 caught: z.defects.filter(d => d.score > tOk).length,
-                atDefect: z.defects.filter(d => d.score > tDef).length,
                 inBox: z.defects.filter(d => d.in_box).length, subs };
         });
     }
 
-    // Ready-made limits: just above the worst good sample, just below the weakest defect, halfway
+    // Ready-made limits: just above the worst good sample, halfway, just below the weakest defect
     function presets(z) {
         const g = worstOf(z.good_scores), ds = z.defects.map(d => d.score);
-        const out = [{ label: 'No false alarms', v: Math.ceil(g * 1.02 * 100) / 100,
-            title: 'Just above the worst good sample' }];
+        const out = [['No false alarms', Math.ceil(g * 1.02 * 100) / 100]];
         if (ds.length) {
             const d = Math.min(...ds);
-            out.push({ label: 'Middle', v: r2((g + d) / 2), title: 'Halfway between the worst good sample and the weakest defect' });
-            out.push({ label: 'Catch all defects', v: Math.floor(d * 0.99 * 100) / 100, title: 'Just below the weakest defect sample' });
+            out.push(['Middle', r2((g + d) / 2)], ['Catch all defects', Math.floor(d * 0.99 * 100) / 100]);
         }
         return out;
     }
 
-    // Score axis shared by the chart and the limit slider of a zone
-    function axis(values) {
-        const lo = Math.max(0, Math.floor(Math.min(...values) * 0.9 * 10) / 10);
-        const hi = Math.ceil(Math.max(...values) * 1.08 * 10) / 10;
-        return { lo, hi, x: v => Math.min(100, Math.max(0, 100 * (v - lo) / (hi - lo || 1))) };
+    function dist(goods, defs, tOk, tDef) {
+        const all = [...goods, ...defs, tOk, tDef];
+        const lo = Math.max(0, Math.min(...all) * 0.95), hi = Math.max(...all) * 1.04;
+        const x = v => `${(100 * (v - lo) / (hi - lo || 1)).toFixed(1)}%`;
+        return `<div class="cal-dist" title="${lo.toFixed(1)} … ${hi.toFixed(1)}">${goods.map(v => `<i class="g" style="left:${x(v)}"></i>`).join('')}${defs.map(v => `<i class="d" style="left:${x(v)}"></i>`).join('')}<span class="t ok" style="left:${x(tOk)}"></span><span class="t def" style="left:${x(tDef)}"></span></div>`;
     }
 
-    function dist(goods, defs, tOk, tDef, ax, big) {
-        const ticks = [];
-        if (big) {
-            const step = ax.hi - ax.lo > 2 ? 0.5 : 0.25;
-            for (let t = Math.ceil(ax.lo / step) * step; t <= ax.hi + 1e-9; t += step)
-                ticks.push(`<span class="tk" style="left:${ax.x(t)}%">${t.toFixed(2).replace(/0$/, '')}</span>`);
-        }
-        return `<div class="cal-dist${big ? ' big' : ''}">${goods.map(v => `<i class="g" style="left:${ax.x(v)}%" title="good ${v.toFixed(2)}"></i>`).join('')}
-            ${defs.map(v => `<i class="d" style="left:${ax.x(v)}%" title="defect ${v.toFixed(2)}"></i>`).join('')}
-            <span class="t ok" style="left:${ax.x(tOk)}%" title="OK limit ${tOk.toFixed(2)}"></span>
-            <span class="t def" style="left:${ax.x(tDef)}%" title="DEFECT limit ${tDef.toFixed(2)}"></span>${ticks.join('')}</div>`;
-    }
-
-    function suspectRow(sp) {
-        const s = samples.find(x => x.id === sp.sample_id);
-        const excluded = s && s.excluded;
-        return `<li class="cal-suspect">
-            <img src="/api/samples/${esc(sp.sample_id)}/image?size=thumb" alt="Sample photo" loading="lazy">
-            <div><b>${sp.kind === 'defect' ? 'defect' : 'good'} sample · ${esc(sp.device || 'phone not named')} · score ${sp.score.toFixed(2)}</b>
-                ${sp.reasons.map(r => `<div class="st-muted">${esc(r)}</div>`).join('')}</div>
-            ${excluded ? '<span class="chip">excluded — recalibrate</span>'
-                : `<button class="btn btn-sm btn-outline" data-exclude="${esc(sp.sample_id)}">Exclude</button>`}</li>`;
-    }
-
-    function zoneCard(z) {
+    function zoneRows(z) {
         const ds = z.defects.map(d => d.score);
-        const sMin = worstOf(z.good_scores) * 0.5, sMax = worstOf(z.good_scores) * 2.5;
-        const ax = axis([...z.good_scores, ...ds, z.t_def, z.t_ok]);
-        const lo = Math.max(sMin, ax.lo), hi = Math.min(sMax, ax.hi);
-        const allCaught = z.caught === z.defects.length;
-        const subRows = z.subs.map(sz => {
-            const sax = axis([...sz.good_scores, ...sz.dscores, sz.t_def]);
-            return `<tr class="cal-sub"><td>${esc(sz.label)}${sz.critical ? ' <span class="chip warn">critical</span>' : ''}</td>
-                <td>${dist(sz.good_scores, sz.dscores, sz.t_ok, sz.t_def, sax)}</td>
-                <td>${sz.t_ok.toFixed(2)}</td>
-                <td><span class="chip ${sz.fa ? 'warn' : 'ok'}">${sz.fa} / ${sz.good_scores.length}</span></td>
-                <td>${sz.n ? `<span class="chip ${sz.caught === sz.n ? 'ok' : (sz.critical ? 'bad' : 'warn')}">${sz.caught} / ${sz.n}</span>` : '—'}</td></tr>`;
-        }).join('');
-        const suspects = z.suspects || [];
-        return `<div class="cal-zone" data-zone="${z.zone}">
-            <div class="st-row st-between"><b>${esc(z.label)}</b>
-                <div class="st-row">
-                    <span class="chip ${z.fa ? 'warn' : 'ok'}">False alarms ${z.fa} / ${z.good_scores.length}</span>
-                    <span class="chip ${allCaught ? 'ok' : 'bad'}">Defects caught ${z.caught} / ${z.defects.length}</span>
-                    ${z.atDefect !== z.caught ? `<span class="st-muted">${z.atDefect} as DEFECT ·</span>` : ''}
-                    ${z.defects.length ? `<span class="st-muted" title="The most unusual spot was inside the labelled box">found in box ${z.inBox} / ${z.defects.length}</span>` : ''}
-                </div></div>
-            ${dist(z.good_scores, ds, z.t_ok, z.t_def, ax, true)}
-            <input type="range" class="cal-range" data-zone="${z.zone}" min="${lo.toFixed(2)}" max="${hi.toFixed(2)}" step="0.01"
-                value="${z.t_ok.toFixed(2)}" aria-label="OK limit for ${esc(z.label)}"
-                style="margin-left:${ax.x(lo)}%;width:${ax.x(hi) - ax.x(lo)}%">
-            <div class="cal-ctrl">
-                <label>OK limit <input type="number" class="cal-num" data-zone="${z.zone}" step="0.01"
-                    min="${sMin.toFixed(2)}" max="${sMax.toFixed(2)}" value="${z.t_ok.toFixed(2)}"></label>
-                ${presets(z).map(p => `<button class="btn btn-sm btn-outline" data-preset="${p.v}" data-zone="${z.zone}" title="${esc(p.title)}">${p.label} · ${p.v.toFixed(2)}</button>`).join('')}
-                <span class="st-muted">WARN up to ${z.t_def.toFixed(2)}, DEFECT above</span>
-            </div>
-            ${ds.length && Math.min(...ds) <= worstOf(z.good_scores) ? `<p class="st-hint">Good and defect samples overlap: no limit gives
-                both zero false alarms and every defect caught. Check the samples listed below, or add good photos shot the way operators will shoot.</p>` : ''}
-            ${subRows ? `<div class="st-table-wrap"><table class="data-table st-table"><thead><tr>
-                <th>Subzone</th><th>Scores</th><th>OK limit</th><th>False alarms</th><th>Caught</th></tr></thead><tbody>${subRows}</tbody></table></div>` : ''}
-            ${suspects.length ? `<p class="st-muted" style="margin-top:8px">Samples worth a second look — one unusual good sample raises the limit for the whole zone:</p>
-                <ul class="cal-suspects">${suspects.map(suspectRow).join('')}</ul>` : ''}
-        </div>`;
+        const g = worstOf(z.good_scores), dmin = ds.length ? Math.min(...ds) : null;
+        const overlap = dmin !== null && dmin <= g;
+        const edited = calibEdits[z.zone] != null;
+        const sel = `<select class="cal-preset" data-zone="${z.zone}" aria-label="Ready-made OK limit"><option value="">preset…</option>
+            ${presets(z).map(([l, v]) => `<option value="${v}">${l} · ${v.toFixed(2)}</option>`).join('')}</select>`;
+        const row = `<tr class="cal-z">
+            <td class="name">${esc(z.label)}</td><td class="n">${z.good_scores.length}</td><td class="n">${z.defects.length}</td>
+            <td>${dist(z.good_scores, ds, z.t_ok, z.t_def)}</td>
+            <td class="n">${f2(g)}</td>
+            <td class="n${overlap ? ' bad' : ''}" ${overlap ? 'title="Below the worst good sample: no limit separates good from defect"' : ''}>${f2(dmin)}</td>
+            <td class="lim"><input type="number" class="cal-num${edited ? ' edited' : ''}" data-zone="${z.zone}" step="0.01"
+                min="${(g * 0.5).toFixed(2)}" max="${(g * 2.5).toFixed(2)}" value="${z.t_ok.toFixed(2)}" aria-label="OK limit for ${esc(z.label)}">${sel}</td>
+            <td class="n">${f2(z.t_def)}</td>
+            <td class="n ${z.fa ? 'warn' : 'ok'}">${z.fa}/${z.good_scores.length}</td>
+            <td class="n ${z.caught === z.defects.length ? 'ok' : 'bad'}">${z.caught}/${z.defects.length}</td>
+            <td class="n">${z.defects.length ? `${z.inBox}/${z.defects.length}` : '—'}</td></tr>`;
+        const subs = z.subs.map(sz => `<tr class="cal-sub">
+            <td class="name">${esc(sz.label)}${sz.critical ? ' <span class="chip warn">crit</span>' : ''}</td><td></td><td class="n">${sz.n || ''}</td>
+            <td>${dist(sz.good_scores, sz.dscores, sz.t_ok, sz.t_def)}</td>
+            <td class="n">${f2(worstOf(sz.good_scores))}</td><td class="n">${sz.dscores.length ? f2(Math.min(...sz.dscores)) : '—'}</td>
+            <td class="n">${f2(sz.t_ok)}</td><td class="n">${f2(sz.t_def)}</td>
+            <td class="n ${sz.fa ? 'warn' : 'ok'}">${sz.fa}/${sz.good_scores.length}</td>
+            <td class="n ${!sz.n ? '' : sz.caught === sz.n ? 'ok' : (sz.critical ? 'bad' : 'warn')}">${sz.n ? `${sz.caught}/${sz.n}` : '—'}</td><td></td></tr>`).join('');
+        return row + subs;
+    }
+
+    function reviewRows(zs) {
+        const rows = [];
+        zs.forEach(z => (z.suspects || []).forEach(sp => {
+            const s = samples.find(x => x.id === sp.sample_id);
+            const note = sp.reasons.map(r => r.startsWith('score') ? 'score high'
+                : r.replace(/^shot from a different angle.*?\((\d+)° away\).*$/, 'angle $1° off')).join(' · ');
+            const zoomUrl = `/api/samples/${esc(sp.sample_id)}/aligned?zone=${z.zone}`;
+            rows.push(`<tr>
+                <td><img class="cal-thumb" src="${zoomUrl}&size=thumb" data-zoom="${zoomUrl}"
+                    data-caption="${esc(z.label)} · ${sp.kind} · ${esc(sp.device || '')} · score ${sp.score.toFixed(2)}" alt="Zone in the sample photo" loading="lazy"></td>
+                <td class="name">${esc(z.label)}</td><td>${sp.kind}</td><td>${esc(sp.device || '—')}</td>
+                <td class="n">${sp.score.toFixed(2)}</td><td class="n">${sp.view_dev != null ? Math.round(sp.view_dev) + '°' : '—'}</td>
+                <td title="${esc(sp.reasons.join('\n'))}">${esc(note)}</td>
+                <td>${s && s.excluded ? '<span class="st-muted">excluded</span>'
+                    : `<button class="btn btn-sm btn-outline" data-exclude="${esc(sp.sample_id)}">Exclude</button>`}</td></tr>`);
+        }));
+        return rows;
     }
 
     function renderCalibration() {
@@ -715,48 +707,39 @@
         const zs = outcomes(cal);
         const totFa = zs.reduce((a, z) => a + z.fa, 0), totGood = zs.reduce((a, z) => a + z.good_scores.length, 0);
         const totDef = zs.reduce((a, z) => a + z.defects.length, 0), totCaught = zs.reduce((a, z) => a + z.caught, 0);
-        const critMiss = zs.some(z => z.subs.some(sz => sz.critical && sz.caught < sz.n));
-        const ok = totCaught === totDef && !critMiss;
         const skipped = (cal.skipped || []).map(sk => `<li>${esc(sk.label)}: ${esc(sk.reason)}</li>`).join('');
         const changed = Object.keys(calibEdits).length > 0;
+        const review = reviewRows(zs);
         $('calib-report').innerHTML = `
-            <div class="st-row" style="margin:8px 0">
-                <span class="chip ${totFa ? 'warn' : 'ok'}">False alarms on good samples: ${totFa} / ${totGood}</span>
-                <span class="chip ${ok ? 'ok' : 'bad'}">Defects caught: ${totCaught} / ${totDef}</span>
-                <span class="st-muted">calibrated ${fmtDate(cal.created_at)}${cal.created_by ? ' · ' + esc(cal.created_by) : ''}</span>
+            <div class="cal-summary">
+                <span>False alarms <b class="${totFa ? 'warn' : 'ok'}">${totFa}/${totGood}</b></span>
+                <span>Defects caught <b class="${totCaught === totDef ? 'ok' : 'bad'}">${totCaught}/${totDef}</b></span>
+                <span class="st-muted">${fmtDate(cal.created_at)}${cal.created_by ? ' · ' + esc(cal.created_by) : ''}</span>
+                <span class="cal-actions${changed ? '' : ' hidden'}">
+                    <button class="btn btn-sm" id="cal-save">Save limits</button>
+                    <button class="btn btn-sm btn-outline" id="cal-reset">Undo</button></span>
             </div>
             ${skipped ? `<ul class="st-list bad">${skipped}</ul>` : ''}
-            <p class="st-hint">Score = how unusual the most unusual spot of the zone is compared with the good samples (about 1 is typical).
-                Choose the OK limit for each zone: drag it on the scale, type it, or use a ready-made value.
-                Above the limit the zone is WARN, above the dashed orange line DEFECT.</p>
-            <div class="cal-legend"><span class="lg">good samples (each vs the others)</span><span class="ld">defect samples</span>
-                <span class="lo">OK limit</span><span class="lw">DEFECT limit</span></div>
-            ${zs.map(zoneCard).join('')}
-            <div class="st-row" style="margin-top:10px">
-                <button class="btn btn-sm" id="cal-save" ${changed ? '' : 'disabled'}>Save limits</button>
-                <button class="btn btn-sm btn-outline" id="cal-reset" ${changed ? '' : 'disabled'}>Undo changes</button>
-                ${!ok ? '<span class="st-muted">Some defect samples pass as OK. You can still publish, but you will be asked to accept it and give a reason.</span>' : ''}
-            </div>`;
-        const setLimit = (zi, v) => {
-            if (!isFinite(v)) return;
-            calibEdits[zi] = v;
-            renderCalibration();
-        };
+            <div class="st-table-wrap"><table class="data-table st-table cal-table"><thead><tr>
+                <th>Zone</th><th class="n">Good</th><th class="n">Def</th><th>Distribution</th>
+                <th class="n">Worst good</th><th class="n">Weakest def</th><th>OK limit</th><th class="n">DEFECT ≥</th>
+                <th class="n">False al.</th><th class="n">Caught</th><th class="n">In box</th>
+            </tr></thead><tbody>${zs.map(zoneRows).join('')}</tbody></table></div>
+            ${review.length ? `<h4 class="cal-h4">Review (${review.length})</h4>
+            <div class="st-table-wrap"><table class="data-table st-table cal-table"><thead><tr>
+                <th></th><th>Zone</th><th>Sample</th><th>Phone</th><th class="n">Score</th><th class="n">View Δ</th><th>Note</th><th></th>
+            </tr></thead><tbody>${review.join('')}</tbody></table></div>` : ''}`;
         const rep = $('calib-report');
-        rep.querySelectorAll('.cal-range').forEach(el => el.addEventListener('change', e => setLimit(+el.dataset.zone, parseFloat(e.target.value))));
-        rep.querySelectorAll('.cal-range').forEach(el => el.addEventListener('input', e => {
-            // live number while dragging; full re-render on release
-            rep.querySelector(`.cal-num[data-zone="${el.dataset.zone}"]`).value = parseFloat(e.target.value).toFixed(2);
-        }));
-        rep.querySelectorAll('.cal-num').forEach(el => el.addEventListener('change', e => setLimit(+el.dataset.zone, parseFloat(e.target.value))));
-        rep.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => setLimit(+b.dataset.zone, parseFloat(b.dataset.preset))));
+        const setLimit = (zi, v) => { if (isFinite(v)) { calibEdits[zi] = v; renderCalibration(); } };
+        rep.querySelectorAll('.cal-num').forEach(el => el.addEventListener('change', () => setLimit(+el.dataset.zone, parseFloat(el.value))));
+        rep.querySelectorAll('.cal-preset').forEach(el => el.addEventListener('change', () => el.value && setLimit(+el.dataset.zone, parseFloat(el.value))));
         rep.querySelectorAll('[data-exclude]').forEach(b => b.addEventListener('click', async () => {
             try {
                 const d = await api(`/api/samples/${b.dataset.exclude}`, { method: 'PATCH', json: { excluded: true } });
                 applyState(d);
                 await refreshSamples();
                 toast('Sample excluded — recalibrate to apply', 'info');
-                renderAll();
+                renderCalibration(); renderTabs(); renderPublish();
             } catch (err) { toast(err.message, 'error'); }
         }));
         $('cal-reset').addEventListener('click', () => { calibEdits = {}; renderCalibration(); });
@@ -771,6 +754,20 @@
             } catch (err) { toast(err.message, 'error'); }
         });
     }
+
+    // Image viewer: any <img data-zoom="url"> opens large on click
+    document.addEventListener('click', e => {
+        const img = e.target.closest('img[data-zoom]');
+        if (!img) return;
+        const cap = img.dataset.caption || '';
+        $('zoom-img').onload = () => { $('zoom-cap').textContent = cap; };
+        $('zoom-img').src = img.dataset.zoom;
+        $('zoom-cap').textContent = 'Loading…';
+        $('zoom-overlay').classList.remove('hidden');
+    });
+    const closeZoom = () => { $('zoom-overlay').classList.add('hidden'); $('zoom-img').src = ''; };
+    $('zoom-overlay').addEventListener('click', closeZoom);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('zoom-overlay').classList.contains('hidden')) closeZoom(); });
 
     // 7 · Publish
     function renderPublish() {

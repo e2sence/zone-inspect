@@ -2785,13 +2785,15 @@ def studio_calibration_status(tid):
         return err
     if not _recipe_or_404(tid):
         return jsonify({"error": "Recipe not found"}), 404
+    job = _calib_jobs.get(tid)
+    if job:   # server-side elapsed time, so client clock skew doesn't matter
+        job = dict(job, elapsed=round((job.get("finished") or time.time()) - job["started"], 1))
+    if request.args.get("job"):      # progress polling: job only, no report
+        return jsonify({"job": job})
     draft = _draft_of(tid)
     if not draft:
         return jsonify({"error": "No draft"}), 404
     state = _draft_state(tid, draft)
-    job = _calib_jobs.get(tid)
-    if job:   # server-side elapsed time, so client clock skew doesn't matter
-        job = dict(job, elapsed=round((job.get("finished") or time.time()) - job["started"], 1))
     return jsonify({"job": job, "calibration": draft.get("calibration"),
                     "margin_range": calibration_mod.MARGIN_RANGE,
                     "defect_band": calibration_mod.DEFECT_BAND, **state})
@@ -2938,9 +2940,10 @@ def studio_sample_image(sample_id):
     data = r2.download_bytes(s["photo_key"])
     if not data:
         return jsonify({"error": "not found"}), 404
-    if request.args.get("size") == "thumb":
+    size = {"thumb": 360.0, "view": 1600.0}.get(request.args.get("size"))
+    if size:
         img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
-        scale = 360.0 / max(img.shape[:2])
+        scale = size / max(img.shape[:2])
         if scale < 1:
             img = cv2.resize(img, None, fx=scale, fy=scale,
                              interpolation=cv2.INTER_AREA)
@@ -2953,7 +2956,8 @@ def studio_sample_image(sample_id):
 @app.route("/api/samples/<sample_id>/aligned")
 def studio_sample_aligned(sample_id):
     """Sample warped onto the draft reference — used to draw defect boxes in
-    reference coordinates."""
+    reference coordinates. ?zone=<i> returns that zone (with some margin), as
+    the calibration sees it; ?size=thumb a small version."""
     err = _studio_guard()
     if err:
         return err
@@ -2969,8 +2973,21 @@ def studio_sample_aligned(sample_id):
     data = r2.download_bytes(s["photo_key"])
     img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
     rw, rh = version["ref_size"]
-    warped = cv2.warpPerspective(img, np.asarray(s["align"]["H"]), (rw, rh))
-    scale = 1600.0 / max(rw, rh)
+    H = np.asarray(s["align"]["H"], np.float64)
+    zi = request.args.get("zone", type=int)
+    if zi is not None and 0 <= zi < len(version.get("zones", [])):
+        z = version["zones"][zi]
+        pad = 0.1
+        x1, y1 = int((z["x"] - z["w"] * pad) * rw), int((z["y"] - z["h"] * pad) * rh)
+        w, h = int(z["w"] * (1 + 2 * pad) * rw), int(z["h"] * (1 + 2 * pad) * rh)
+        T = np.array([[1, 0, -x1], [0, 1, -y1], [0, 0, 1]], np.float64)
+        warped = cv2.warpPerspective(img, T @ H, (w, h))
+        cv2.rectangle(warped, (int(z["w"] * pad * rw), int(z["h"] * pad * rh)),
+                      (int(z["w"] * (1 + pad) * rw), int(z["h"] * (1 + pad) * rh)), (0, 200, 255), 3)
+    else:
+        warped = cv2.warpPerspective(img, H, (rw, rh))
+    limit = 240.0 if request.args.get("size") == "thumb" else 1600.0
+    scale = limit / max(warped.shape[:2])
     if scale < 1:
         warped = cv2.resize(warped, None, fx=scale, fy=scale,
                             interpolation=cv2.INTER_AREA)

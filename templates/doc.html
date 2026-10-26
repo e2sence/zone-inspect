@@ -580,10 +580,12 @@
                             <span class="kw">caught</span> when its score is above the OK limit, and the report shows
                             whether the strongest deviation lies inside the box you drew.</p>
                         <p>The score shows how unusual the most unusual spot of the zone is compared with the good
-                            samples; about 1 is typical. Each zone has its own <strong>OK limit</strong>: drag it on the
-                            zone's scale, type it, or pick a ready-made value: <em>No false alarms</em> (just above
-                            the worst good sample), <em>Catch all defects</em> (just below the weakest defect) or
-                            <em>Middle</em>. The counts update at once; then <strong>Save limits</strong>. By default
+                            samples; about 1 is typical. The report is a table: one row per zone with its subzones below.
+                            Each zone has its own <strong>OK limit</strong>: type it, or pick a preset: <em>No false
+                            alarms</em> (just above the worst good sample), <em>Catch all defects</em> (just below the
+                            weakest defect) or <em>Middle</em>. The counts update at once; then <strong>Save
+                            limits</strong>. Explanations are behind the <strong>?</strong> buttons; thumbnails open
+                            large on click. By default
                             the limit is the worst good sample × 1.10. Between the OK limit and 1.25 × that limit the
                             result is WARN, above it DEFECT. Subzones follow their zone's limit.</p>
                         <p>Under each zone the report lists samples worth a second look: good samples shot from a
@@ -1242,11 +1244,12 @@ curl -s "$HOST/api/v1/results"
                             <span class="kw">пойман</span>, если его оценка выше порога OK, и отчёт показывает,
                             попало ли самое сильное отклонение в нарисованную рамку.</p>
                         <p>Оценка показывает, насколько необычно самое необычное место зоны по сравнению с хорошими
-                            образцами; около 1 — обычное значение. У каждой зоны свой <strong>порог OK</strong>:
-                            перетащите его на шкале зоны, введите число или выберите готовое значение:
+                            образцами; около 1 — обычное значение. Отчёт — таблица: строка на зону, под ней её подзоны. У каждой
+                            зоны свой <strong>порог OK</strong>: введите число или выберите готовое значение:
                             <em>No false alarms</em> (чуть выше худшего хорошего образца), <em>Catch all defects</em>
                             (чуть ниже самого слабого дефекта) или <em>Middle</em> (посередине). Цифры обновляются сразу,
-                            затем <strong>Save limits</strong>. По умолчанию порог — худший хороший образец × 1.10.
+                            затем <strong>Save limits</strong>. Пояснения спрятаны под кнопками <strong>?</strong>;
+                            миниатюры открываются крупно по клику. По умолчанию порог — худший хороший образец × 1.10.
                             Между порогом OK и 1.25 × порог — WARN, выше — DEFECT. Подзоны следуют порогу своей зоны.</p>
                         <p>Под каждой зоной отчёт показывает образцы, на которые стоит взглянуть: хорошие, снятые с
                             другого ракурса, чем большинство хороших, или с оценкой намного выше остальных, и дефектные,

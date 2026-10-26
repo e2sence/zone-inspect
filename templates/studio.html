@@ -99,8 +99,9 @@
                                     <label>Zone strictness (0–2) <input id="d-zsens" type="number" min="0" max="2" step="0.01" placeholder="default 0.50"></label>
                                     <label>Subzone strictness (0–2) <input id="d-ssens" type="number" min="0" max="2" step="0.01" placeholder="default 0.51"></label>
                                 </div>
-                                <p class="st-hint">Strictness is part of the recipe: operators cannot change it. Calibration
-                                    (coming in a later release) will set thresholds from your samples instead.</p>
+                                <details class="st-help"><summary>?</summary>Strictness is part of the recipe: operators
+                                    cannot change it. It applies only to recipes without a calibration; a calibrated recipe
+                                    uses the OK limits from step 6.</details>
                                 <div class="st-row"><button class="btn btn-sm" type="submit">Save details</button></div>
                             </form>
                         </div>
@@ -114,8 +115,8 @@
                                     <div id="ref-quality"></div>
                                     <label class="btn btn-sm st-file">Upload reference<input type="file" id="ref-file" accept="image/*"></label>
                                     <label class="btn btn-sm btn-outline st-file">Blend several photos…<input type="file" id="ref-blend" accept="image/*" multiple></label>
-                                    <p class="st-hint">Use a sharp, evenly lit photo of a known-good board, taken the way operators
-                                        will shoot. Blending averages 2+ aligned photos to reduce noise and glare.</p>
+                                    <details class="st-help"><summary>?</summary>Use a sharp, evenly lit photo of a known-good
+                                        board. Blending averages 2+ aligned photos to reduce noise and glare.</details>
                                     <p class="st-hint" id="ref-warning"></p>
                                 </div>
                             </div>
@@ -142,10 +143,21 @@
                                 <div class="st-row"><span id="calib-status"></span>
                                     <button class="btn btn-sm" id="btn-calibrate">Calibrate</button></div>
                             </div>
-                            <p class="st-hint">Calibration learns what normal variation looks like from your good samples and
-                                checks every defect sample against it. Each good sample is compared with all the others, so the
-                                report shows how many false alarms to expect on good boards. A defect is <b>caught</b> when its
-                                score is above the OK limit. Takes from several seconds to a minute.</p>
+                            <details class="st-help"><summary>?</summary>
+                                <p>Calibration learns the normal variation of each zone from the good samples and checks every
+                                    defect sample against it. Each good sample is scored against all the others, so false alarms
+                                    on good boards are predicted. A defect is <b>caught</b> when its score is above the OK limit.</p>
+                                <p><b>Score</b>: how unusual the most unusual spot of the zone is compared with the good samples
+                                    (about 1 is typical). WARN between the OK limit and 1.25 × the limit, DEFECT above.
+                                    Subzones follow their zone's limit. <b>In box</b>: the most unusual spot lies inside the
+                                    labelled box.</p>
+                                <p><b>Distribution</b>: green = good samples, red = defect samples, blue line = OK limit,
+                                    orange = DEFECT limit.</p>
+                                <p><b>Review</b>: good samples that raise the limit (score far above the others, or shot from a
+                                    different angle than most good samples) and defect samples shot from a different angle
+                                    (their score mixes the angle and the defect). Click a thumbnail to see the zone; exclude
+                                    a sample if it does not show the zone the usual way, then recalibrate.</p>
+                            </details>
                             <div class="st-calib-run hidden" id="calib-run">
                                 <div class="st-row st-between"><b id="calib-run-pct">0%</b>
                                     <span class="st-muted" id="calib-run-time"></span></div>
@@ -196,6 +208,12 @@
                 <button class="btn btn-outline" id="lb-cancel">Cancel</button>
             </div>
         </div>
+    </div>
+
+    <!-- Image viewer -->
+    <div id="zoom-overlay" class="st-zoom hidden" role="dialog" aria-label="Image viewer">
+        <img id="zoom-img" alt="">
+        <span id="zoom-cap" class="st-muted"></span>
     </div>
 
     <script>window.STUDIO = { role: {{ auth_role|tojson }}, user: {{ auth_user|tojson }} };</script>

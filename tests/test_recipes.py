@@ -369,6 +369,9 @@ class TestCalibration:
         st = _calibrate(authed_client, tid)
         z = st["calibration"]["zones"][0]
         assert z["n_good"] == 15 and z["caught"] == 2 and z["false_alarms"] == 0
+        # progress polling returns the job only
+        light = authed_client.get(f"/api/recipes/{tid}/calibrate?job=1").get_json()
+        assert set(light) == {"job"} and light["job"]["state"] == "done"
         assert st["check"]["ok"], st["check"]
         # excluding a sample makes the calibration stale
         sid = authed_client.get(f"/api/recipes/{tid}/samples?kind=good").get_json()["samples"][0]["id"]
