@@ -230,6 +230,36 @@ def _similarity_from_feats(a_feats, b_feats) -> float:
     return round(min(max(score, 0.0), 1.0), 4)
 
 
+# Layers read by _similarity_from_feats and analyze_defects_nn (PATCH_LAYER=5,
+# global=7). Cached reference features keep only these (~0.6 MB per image
+# instead of ~2.3 MB with the early layers).
+CACHE_LAYERS = (5, 7)
+
+
+@torch.no_grad()
+def reference_features(images: list[np.ndarray], preprocess=None):
+    """Features of constant reference crops, for caching per session.
+    Returns list of (glob, feats) with feats restricted to CACHE_LAYERS
+    and detached from the batch tensor (safe to keep long-term)."""
+    out = []
+    for glob, feats in extract_features_batch(images, preprocess):
+        out.append((glob.clone(),
+                    {k: feats[k].clone() for k in CACHE_LAYERS}))
+    return out
+
+
+@torch.no_grad()
+def similarity_nn_cached(ref_feats: list, images: list[np.ndarray]) -> list[float]:
+    """Same scores as similarity_nn_batch(zip(refs, images)), but with the
+    reference side taken from reference_features() — one forward pass for
+    the photo crops only."""
+    if not images:
+        return []
+    ext = extract_features_batch(images)
+    return [_similarity_from_feats(rf[1], ef[1])
+            for rf, ef in zip(ref_feats, ext)]
+
+
 @torch.no_grad()
 def similarity_nn_batch(pairs: list[tuple[np.ndarray, np.ndarray]]) -> list[float]:
     """
@@ -258,36 +288,61 @@ def similarity_nn_batch(pairs: list[tuple[np.ndarray, np.ndarray]]) -> list[floa
     return scores
 
 
-def align_photo_to_ref(ref_img: np.ndarray, photo: np.ndarray):
+def flann_knn(des1, des2, k=2, checks=50):
+    """FLANN kd-tree kNN match, deterministic.
+
+    FLANN builds randomized kd-trees from OpenCV's RNG, whose state otherwise
+    depends on every earlier call in the thread — the same photo could then
+    align slightly differently (and flip a verdict) depending on what the
+    server processed before. Seeding per call makes results reproducible;
+    cv::theRNG() is thread-local, so concurrent requests don't interfere.
+    """
+    cv2.setRNGSeed(0)
+    flann = cv2.FlannBasedMatcher(dict(algorithm=1, trees=5),
+                                  dict(checks=checks))
+    return flann.knnMatch(des1, des2, k=k)
+
+
+_ALIGN_MAX_DIM = 1200
+
+
+def reference_sift(ref_img: np.ndarray):
+    """SIFT of the reference for align_photo_to_ref — constant per template,
+    so callers compute it once per session and pass it back in.
+    Returns (keypoint coords Nx2 float32, descriptors, scale)."""
+    rh, rw = ref_img.shape[:2]
+    r_scale = min(_ALIGN_MAX_DIM / max(rh, rw), 1.0)
+    ref_small = cv2.resize(ref_img, None, fx=r_scale, fy=r_scale)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    ref_gray = clahe.apply(cv2.cvtColor(ref_small, cv2.COLOR_BGR2GRAY))
+    kp, des = cv2.SIFT_create(nfeatures=5000).detectAndCompute(ref_gray, None)
+    pts = np.float32([k.pt for k in kp]).reshape(-1, 2)
+    return pts, des, r_scale
+
+
+def align_photo_to_ref(ref_img: np.ndarray, photo: np.ndarray, ref_sift=None):
     """
     Глобальное выравнивание: warp фото в координаты референса.
     Вызывать ОДИН РАЗ на фото — затем кропать зоны из результата.
+    ref_sift: результат reference_sift(ref_img) (кэш на сессию), иначе считается.
     Returns: warped photo (same size as ref_img) or None.
     """
-    max_dim = 1200
     rh, rw = ref_img.shape[:2]
     ph, pw = photo.shape[:2]
-    r_scale = min(max_dim / max(rh, rw), 1.0)
-    p_scale = min(max_dim / max(ph, pw), 1.0)
+    p_scale = min(_ALIGN_MAX_DIM / max(ph, pw), 1.0)
+    pts1, des1, r_scale = ref_sift if ref_sift is not None else reference_sift(ref_img)
 
-    ref_small = cv2.resize(ref_img, None, fx=r_scale, fy=r_scale)
     photo_small = cv2.resize(photo, None, fx=p_scale, fy=p_scale)
-
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    ref_gray = clahe.apply(cv2.cvtColor(ref_small, cv2.COLOR_BGR2GRAY))
     photo_gray = clahe.apply(cv2.cvtColor(photo_small, cv2.COLOR_BGR2GRAY))
 
     sift = cv2.SIFT_create(nfeatures=5000)
-    kp1, des1 = sift.detectAndCompute(ref_gray, None)
     kp2, des2 = sift.detectAndCompute(photo_gray, None)
 
     if des1 is None or des2 is None or len(des1) < 10 or len(des2) < 10:
         return None
 
-    index_params = dict(algorithm=1, trees=5)
-    search_params = dict(checks=50)
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
-    matches = flann.knnMatch(des1, des2, k=2)
+    matches = flann_knn(des1, des2, k=2)
 
     good = [m for m_pair in matches if len(m_pair) == 2
             for m, n in [m_pair] if m.distance < 0.7 * n.distance]
@@ -295,7 +350,7 @@ def align_photo_to_ref(ref_img: np.ndarray, photo: np.ndarray):
         return None
 
     src_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
-    dst_pts = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+    dst_pts = pts1[[m.queryIdx for m in good]].reshape(-1, 1, 2)
     M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 3.0)
 
     if M is None or mask is None:
@@ -382,10 +437,7 @@ def _try_global_alignment(ref_img, photo, zone):
         return None
 
     # FLANN matcher — быстрее BF для больших наборов фичей
-    index_params = dict(algorithm=1, trees=5)  # FLANN_INDEX_KDTREE
-    search_params = dict(checks=50)
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
-    matches = flann.knnMatch(des1, des2, k=2)
+    matches = flann_knn(des1, des2, k=2)
 
     good = [m for m_pair in matches if len(m_pair) == 2
             for m, n in [m_pair] if m.distance < 0.7 * n.distance]
@@ -506,6 +558,17 @@ def _try_template_match(zone_crop, photo):
     return crop
 
 
+def defect_preprocess(img: np.ndarray) -> np.ndarray:
+    """CLAHE (LAB L-channel) + blur applied before feature extraction in
+    analyze_defects_nn. Exposed so the reference side can be cached."""
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    clahe = cv2.createCLAHE(clipLimit=cfg.CLAHE_CLIP_LIMIT,
+                            tileGridSize=cfg.CLAHE_TILE_SIZE)
+    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+    norm = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    return cv2.GaussianBlur(norm, cfg.PRE_BLUR_KERNEL, 0)
+
+
 @torch.no_grad()
 def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
                        extract_nn_score: float = 0.0,
@@ -539,29 +602,18 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
     safety_sim = th.SUBZONE_SAFETY_SIM_LOW if strict else th.SAFETY_SIM_LOW
 
     # ─── Предобработка ────────────────────────────────────────────────────
-    z_lab = cv2.cvtColor(zone_crop, cv2.COLOR_BGR2LAB)
-    e_lab = cv2.cvtColor(extracted, cv2.COLOR_BGR2LAB)
     clahe_pre = cv2.createCLAHE(clipLimit=th.CLAHE_CLIP_LIMIT,
                                 tileGridSize=th.CLAHE_TILE_SIZE)
-    z_lab[:, :, 0] = clahe_pre.apply(z_lab[:, :, 0])
-    e_lab[:, :, 0] = clahe_pre.apply(e_lab[:, :, 0])
-    z_norm = cv2.cvtColor(z_lab, cv2.COLOR_LAB2BGR)
-    e_norm = cv2.cvtColor(e_lab, cv2.COLOR_LAB2BGR)
-
-    z_blur = cv2.GaussianBlur(z_norm, th.PRE_BLUR_KERNEL, 0)
-    e_blur = cv2.GaussianBlur(e_norm, th.PRE_BLUR_KERNEL, 0)
 
     # Use cached features or compute fresh
     if zone_feats is not None:
         _, z_feats = zone_feats
     else:
-        z_t = _to_tensor(z_blur)
-        _, z_feats = m(z_t)
+        _, z_feats = m(_to_tensor(defect_preprocess(zone_crop)))
     if extracted_feats is not None:
         _, e_feats = extracted_feats
     else:
-        e_t = _to_tensor(e_blur)
-        _, e_feats = m(e_t)
+        _, e_feats = m(_to_tensor(defect_preprocess(extracted)))
 
     # ─── 1. Глобальное сходство ───────────────────────────────────────────
     z_pool = F.adaptive_avg_pool2d(z_feats[7], 1).flatten()

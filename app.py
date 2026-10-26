@@ -68,6 +68,8 @@ try:
     from nn_engine import (match_score_nn, analyze_defects_nn,
                            locate_and_extract_nn, similarity_nn,
                            similarity_nn_batch, similarity_nn_from_feats,
+                           similarity_nn_cached, reference_features,
+                           reference_sift, defect_preprocess,
                            extract_features, extract_features_batch,
                            align_photo_to_ref, NN_DEVICE)
     NN_AVAILABLE = True
@@ -701,6 +703,7 @@ def _try_global_align_full(ref_img, photo):
 
     index_params = dict(algorithm=1, trees=5)
     search_params = dict(checks=50)
+    cv2.setRNGSeed(0)  # deterministic kd-trees (see nn_engine.flann_knn)
     flann = cv2.FlannBasedMatcher(index_params, search_params)
     matches = flann.knnMatch(des2, des1, k=2)
     good = [m for m_pair in matches if len(m_pair) == 2
@@ -1101,6 +1104,28 @@ def check_zone(sid):
         return jsonify({"error": f"Internal error: {e}"}), 500
 
 
+def _ref_cache(s: dict) -> dict:
+    """Per-session cache of reference-side features. The reference image and
+    zones are constant between photos, so their SIFT / CNN features are
+    computed once instead of on every check. Reset when zones change."""
+    key = json.dumps(s["zones"], sort_keys=True, default=str)
+    c = s.get("_ref_cache")
+    if c is None or c["key"] != key:
+        c = s["_ref_cache"] = {"key": key, "zone": {}, "zone_pre": {},
+                               "sub": {}}
+    return c
+
+
+def _cached_ref_feats(store: dict, crops: dict, preprocess=None) -> list:
+    """Features for crops {key: image}, computing only the missing ones
+    (in one batch). Returns them in crops' order."""
+    missing = [k for k in crops if k not in store]
+    if missing:
+        feats = reference_features([crops[k] for k in missing], preprocess)
+        store.update(zip(missing, feats))
+    return [store[k] for k in crops]
+
+
 def _check_zone_impl(sid, photo_img=None):
     if sid not in sessions:
         return jsonify({"error": "Session not found"}), 404
@@ -1167,7 +1192,9 @@ def _check_zone_impl(sid, photo_img=None):
     # STEP 1: Global alignment ONCE
     warped = None
     if NN_AVAILABLE:
-        warped = align_photo_to_ref(ref_img, photo)
+        if s.get("_ref_sift") is None:
+            s["_ref_sift"] = reference_sift(ref_img)
+        warped = align_photo_to_ref(ref_img, photo, ref_sift=s["_ref_sift"])
     else:
         warped = _try_global_align_full(ref_img, photo)
 
@@ -1196,9 +1223,18 @@ def _check_zone_impl(sid, photo_img=None):
                     extracted = cv2.resize(raw, (zw, zh))
                     method = "global_homography"
 
+        if extracted is None and warped is None:
+            # Slow fallback: per-zone localization — only when global
+            # alignment failed. With a valid homography a black crop just
+            # means "this zone is outside the photo"; searching for it
+            # anyway cost ~1 s per zone and never produced a winning match.
+            # ref_img/zone are not passed: global alignment was already
+            # tried (identically) in step 1.
+            extracted, method = _locate_and_extract(crop, photo)
         if extracted is None:
-            # Slow fallback: per-zone localization
-            extracted, method = _locate_and_extract(crop, photo, ref_img, z)
+            candidates.append({"idx": i, "ssim_quick": 0.0,
+                              "extracted": None, "method": None})
+            continue
 
         # Quick SSIM for ranking (near-instant)
         a_g = cv2.cvtColor(cv2.resize(crop, (128, 128)), cv2.COLOR_BGR2GRAY)
@@ -1215,14 +1251,15 @@ def _check_zone_impl(sid, photo_img=None):
 
     TOP_N = min(3, len(valid))
     top_candidates = valid[:TOP_N]
+    rc = _ref_cache(s) if NN_AVAILABLE else None
     if NN_AVAILABLE and top_candidates:
-        # Batch inference: one forward pass for all top pairs
-        pairs = []
+        # One forward pass for the photo crops; reference side from cache
+        crops = {}
         for c in top_candidates:
-            crop = _crop_zone(ref_img, zones[c["idx"]])
-            c["_crop"] = crop
-            pairs.append((crop, c["extracted"]))
-        batch_scores = similarity_nn_batch(pairs)
+            c["_crop"] = crops[c["idx"]] = _crop_zone(ref_img, zones[c["idx"]])
+        batch_scores = similarity_nn_cached(
+            _cached_ref_feats(rc["zone"], crops),
+            [c["extracted"] for c in top_candidates])
         for c, sc in zip(top_candidates, batch_scores):
             c["score"] = sc
     else:
@@ -1281,19 +1318,20 @@ def _check_zone_impl(sid, photo_img=None):
             sz_pairs.append((szi, sz, sz_ref, sz_ext))
 
         if NN_AVAILABLE and sz_pairs:
-            # Batch: extract features for all subzone refs + extracteds at once
-            all_imgs = []
-            for _, _, sz_ref, sz_ext in sz_pairs:
-                all_imgs.append(sz_ref)
-                all_imgs.append(sz_ext)
-            all_feats = extract_features_batch(all_imgs)
+            # Batch: features for all subzone crops of the photo at once;
+            # reference subzone features from the session cache
+            ref_feats = _cached_ref_feats(
+                rc["sub"], {(best["idx"], szi): sz_ref
+                            for szi, _, sz_ref, _ in sz_pairs})
+            ext_feats = extract_features_batch(
+                [sz_ext for _, _, _, sz_ext in sz_pairs])
             for pi, (szi, sz, sz_ref, sz_ext) in enumerate(sz_pairs):
                 # Per-subzone sensitivity override
                 _sz_sens = sz.get("sensitivity")
                 sz_thr = (_cfg.thresholds(zone_sens, _sz_sens)
                           if _sz_sens is not None else thr)
-                zf = all_feats[pi * 2]
-                ef = all_feats[pi * 2 + 1]
+                zf = ref_feats[pi]
+                ef = ext_feats[pi]
                 sz_defect = _analyze_defects(
                     sz_ref, sz_ext, best_score, strict=True,
                     zone_feats=zf, extracted_feats=ef, thr=sz_thr)
@@ -1332,8 +1370,13 @@ def _check_zone_impl(sid, photo_img=None):
                     "reference_b64": sz_defect["reference_b64"],
                 })
 
+        zone_feats = None
+        if NN_AVAILABLE:
+            zone_feats = _cached_ref_feats(
+                rc["zone_pre"], {best["idx"]: best_crop},
+                preprocess=defect_preprocess)[0]
         defect_info = _analyze_defects(best_crop, extracted, best_score,
-                                       thr=thr)
+                                       zone_feats=zone_feats, thr=thr)
 
         # Итоговый статус зоны = худший из (зона, подзоны)
         if subzone_results:

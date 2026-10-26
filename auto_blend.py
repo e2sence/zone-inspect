@@ -269,6 +269,7 @@ def _try_sift_match(base_kp, base_des, kp2, des2,
     base_full_h, base_full_w = base_full_shape
     bh, bw = base_small_shape
 
+    cv2.setRNGSeed(0)  # deterministic kd-trees: same photos → same blend
     flann = cv2.FlannBasedMatcher(dict(algorithm=1, trees=5), dict(checks=80))
     matches = flann.knnMatch(base_des, des2, k=2)
 
