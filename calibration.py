@@ -32,6 +32,7 @@ import torch
 import torch.nn.functional as F
 
 import nn_engine as nn
+from recipes import MAX_VIEW_ANGLE
 
 MODEL = "patch-v1"
 IN_H = 480                 # zone crops are resized to this height (aspect kept)
@@ -40,7 +41,7 @@ BORDER = 3                 # cells ignored along the zone edge
 COVERAGE_MIN = 0.97        # a cell counts only if the photo covers it
 ZONE_COVERAGE_MIN = 0.90   # share of the zone that must be in the photo
 MARGIN_DEFAULT = 1.10
-MARGIN_RANGE = (0.90, 1.80)
+MARGIN_RANGE = (0.50, 2.50)   # OK limit ÷ worst good score, per zone
 DEFECT_BAND = 1.25         # DEFECT above t_ok × DEFECT_BAND
 MIN_GOOD_TO_CALIBRATE = 5
 
@@ -151,12 +152,24 @@ def status_of(score, t_ok, t_def):
     return "ok" if score <= t_ok else ("warn" if score <= t_def else "defect")
 
 
-def apply_margin(calib: dict, margin: float) -> dict:
-    """Recompute thresholds and per-sample outcomes for a new margin
-    (no feature extraction needed)."""
-    margin = float(min(max(margin, MARGIN_RANGE[0]), MARGIN_RANGE[1]))
-    calib["margin"] = round(margin, 3)
+def _clamp_margin(m):
+    return round(float(min(max(m, MARGIN_RANGE[0]), MARGIN_RANGE[1])), 4)
+
+
+def apply_margin(calib: dict, margin: float | None = None, zone_margins: dict | None = None) -> dict:
+    """Recompute thresholds and per-sample outcomes (no feature extraction).
+    margin: default for all zones; zone_margins: {zone index: margin} chosen
+    per zone in Studio. Subzones follow their zone's margin."""
+    if margin is not None:
+        calib["margin"] = _clamp_margin(margin)
+        for z in calib["zones"]:
+            z.pop("margin", None)
+    zone_margins = {int(k): v for k, v in (zone_margins or {}).items()}
+    missed_detail = []
     for z in calib["zones"]:
+        if z["zone"] in zone_margins:
+            z["margin"] = _clamp_margin(zone_margins[z["zone"]])
+        margin = z.get("margin", calib["margin"])
         z["t_ok"], z["t_def"] = thresholds(z["good_scores"], margin)
         z["false_alarms"] = sum(s > z["t_ok"] for s in z["good_scores"])
         for d in z["defects"]:
@@ -172,8 +185,14 @@ def apply_margin(calib: dict, margin: float) -> dict:
                 d["sub_status"] = status_of(d["sub_scores"][j], sz["t_ok"], sz["t_def"])
             sz["defects"] = len(mine)
             sz["caught"] = sum(d["sub_status"] != "ok" for d in mine)
-    calib["missed"] = sum(z["caught"] < len(z["defects"]) for z in calib["zones"]) + sum(
-        sz["caught"] < sz["defects"] for z in calib["zones"] for sz in z["subzones"] if sz["critical"])
+            if sz["critical"] and sz["caught"] < sz["defects"]:
+                missed_detail.append(f"{z['label']} / {sz['label']} (critical): "
+                                     f"{sz['defects'] - sz['caught']} of {sz['defects']} defect samples pass as OK")
+        if z["caught"] < len(z["defects"]):
+            missed_detail.insert(0, f"{z['label']}: {len(z['defects']) - z['caught']} of "
+                                    f"{len(z['defects'])} defect samples pass as OK")
+    calib["missed"] = len(missed_detail)
+    calib["missed_detail"] = missed_detail
     return calib
 
 
@@ -199,7 +218,7 @@ _STAGES = (("load", 0.25), ("features", 0.45), ("loo", 0.2), ("defects", 0.1))
 
 
 def calibrate(version: dict, samples: list, load_photo, progress=lambda msg, frac=None: None,
-              margin: float = MARGIN_DEFAULT):
+              margin: float = MARGIN_DEFAULT, zone_margins: dict | None = None):
     """Build per-zone models from derived samples.
     load_photo(sample) → BGR image. progress(message, fraction 0..1) is called
     after every photo. Returns (calib dict, {zone index: npz bytes})."""
@@ -285,6 +304,7 @@ def calibrate(version: dict, samples: list, load_photo, progress=lambda msg, fra
             "in_w": geom.in_w, "in_h": geom.in_h,
             "n_good": len(goods), "good_scores": good_scores,
             "good_ids": [s["id"] for s, _, _ in goods],
+            "suspects": _suspects([s for s, _, _ in goods], good_scores),
             "defects": drows,
             "subzones": [{"label": sz.get("label", f"S{j + 1}"), "critical": bool(sz.get("critical")),
                           "good_scores": [g[j] for g in good_sub]}
@@ -293,7 +313,29 @@ def calibrate(version: dict, samples: list, load_photo, progress=lambda msg, fra
         buf = io.BytesIO()
         np.savez_compressed(buf, bank=torch.stack(FG).numpy().astype(np.float16), norm=norm)
         blobs[zi] = buf.getvalue()
-    return apply_margin(calib, margin), blobs
+    return apply_margin(calib, margin, zone_margins), blobs
+
+
+def _suspects(goods: list, good_scores: list) -> list:
+    """Good samples worth a second look: shot at a steep angle (tall parts
+    look different) or scoring far above the other good samples (the zone may
+    be cut out wrongly, blurred or the board may actually have a defect).
+    One such sample raises the OK limit for the whole zone."""
+    sc = np.asarray(good_scores, np.float64)
+    med = float(np.median(sc)) if sc.size else 0.0
+    mad = float(np.median(np.abs(sc - med))) * 1.4826 if sc.size else 0.0
+    out = []
+    for s, score in zip(goods, good_scores):
+        reasons = []
+        angle = s.get("view_angle")
+        if angle is not None and angle > MAX_VIEW_ANGLE:
+            reasons.append(f"shot at {angle:.0f}° (limit {MAX_VIEW_ANGLE:.0f}°): hold the phone parallel to the board")
+        if mad > 0 and score > med + 4 * mad:
+            reasons.append(f"score {score:.2f} is far above the other good samples (typical {med:.2f})")
+        if reasons:
+            out.append({"sample_id": s["id"], "score": score, "view_angle": angle,
+                        "device": s.get("device"), "reasons": reasons})
+    return sorted(out, key=lambda x: -x["score"])
 
 
 # ─── Inspection with a calibrated zone ───────────────────────────────────────

@@ -110,8 +110,19 @@ a.st-link#back-to-list { border: none; padding-left: 0; }
 .cal-dist .t.ok { border-left: 2px dashed var(--accent); }
 .cal-dist .t.def { border-left: 2px dashed var(--warn); }
 .cal-sub td:first-child { padding-left: 22px; color: var(--muted); }
-.cal-slider { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0; font-size: 12px; }
-.cal-slider input[type=range] { flex: 1 1 220px; accent-color: var(--accent); }
+.cal-dist.big { height: 44px; margin: 6px 0 18px; }
+.cal-dist.big i { width: 4px; }
+.cal-dist .tk { position: absolute; bottom: -16px; transform: translateX(-50%); font-size: 10px; color: var(--muted); font-family: var(--mono); }
+.cal-dist .tk::before { content: ""; position: absolute; left: 50%; top: -4px; height: 4px; border-left: 1px solid var(--border-light); }
+.cal-zone { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg2); padding: 10px 12px; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.cal-range { display: block; margin: 0; accent-color: var(--accent); }
+.cal-ctrl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.cal-num { width: 78px; padding: 4px 6px; background: var(--card2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono); }
+.cal-suspects { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.cal-suspect { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 12px; }
+.cal-suspect img { width: 64px; height: 48px; object-fit: cover; border-radius: 3px; border: 1px solid var(--border); }
+.st-ack { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 10px; font-size: 12px; }
+.st-ack input[type=text] { padding: 6px 8px; background: var(--card2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); }
 .cal-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin: 6px 0; }
 .cal-legend span::before { content: ""; display: inline-block; width: 10px; height: 8px; margin-right: 4px; vertical-align: 0; }
 .cal-legend .lg::before { background: rgba(46, 160, 67, .8); }

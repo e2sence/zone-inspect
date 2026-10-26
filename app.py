@@ -1232,6 +1232,10 @@ def _check_zone_calibrated(s: dict, photo, from_mobile: bool, photo_path):
         verdict = {"ok": "OK ✅ — within the normal variation of the good samples",
                    "warn": "Warning ⚠️ — unusual area, check it",
                    "defect": "Defect ❌ — outside the normal variation"}[res["status"]]
+        angle = recipes_mod.view_angle(H, (photo.shape[1], photo.shape[0]),
+                                       (ref_img.shape[1], ref_img.shape[0]))
+        steep = angle is not None and angle > recipes_mod.MAX_VIEW_ANGLE
+        result["view_angle"] = angle
         vis_def, vis_heat, n_regions = _vis_calibrated(res["crop"], res["map"], res["t_ok"], res["t_def"])
         sub_results = []
         gh, gw = res["map"].shape
@@ -1259,6 +1263,8 @@ def _check_zone_calibrated(s: dict, photo, from_mobile: bool, photo_path):
             if rank[sr["status"]] > rank[status]:
                 status = sr["status"]
                 verdict = f"{verdict} (subzone: {sr['label']})"
+        if steep and status != "ok":
+            verdict += f" · photo taken at {angle:.0f}° — retake holding the phone parallel to the board"
         from datetime import datetime as _dt, timezone as _tz, timedelta as _td
         s["checked"][best] = {
             "score": result["best_score"], "photo_b64": photo_b64,
@@ -2348,7 +2354,8 @@ def _calib_state(draft: dict, samples: list) -> dict:
         return {"present": False, "fresh": False}
     return {"present": True,
             "fresh": cal.get("fingerprint") == calibration_mod.fingerprint(draft, samples),
-            "missed": cal.get("missed", 0), "skipped": cal.get("skipped", []),
+            "missed": cal.get("missed", 0), "missed_detail": cal.get("missed_detail", []),
+            "skipped": cal.get("skipped", []),
             "margin": cal.get("margin"), "created_at": cal.get("created_at")}
 
 
@@ -2442,6 +2449,7 @@ def studio_get_recipe(tid):
         {"recipe_id": tid},
         {"_id": 0, "version": 1, "status": 1, "created_at": 1, "created_by": 1,
          "published_at": 1, "published_by": 1, "migrated": 1,
+         "published_forced": 1, "published_accepted": 1,
          "ref_shared_legacy": 1}).sort("version", -1))
     draft = _draft_of(tid)
     return jsonify({
@@ -2637,7 +2645,9 @@ def studio_upload_reference(tid):
 @app.route("/api/recipes/<tid>/publish", methods=["POST"])
 def studio_publish(tid):
     """Make the draft the active version. Blocked while publish_check has
-    blockers; an admin may override with {"force": true}."""
+    blockers; an admin may override with {"force": true}. Defect samples the
+    calibration does not catch (check.needs_ack) must be accepted with
+    {"accept_missed": true, "reason": "..."}; the reason is kept on the version."""
     err = _studio_guard()
     if err:
         return err
@@ -2648,16 +2658,24 @@ def studio_publish(tid):
     if not draft:
         return jsonify({"error": "No draft"}), 404
     state = _draft_state(tid, draft)
-    force = bool((request.get_json(silent=True) or {}).get("force"))
+    body = request.get_json(silent=True) or {}
+    force = bool(body.get("force"))
     if not state["check"]["ok"]:
         if not (force and getattr(request, "auth_role", "") == "admin"):
             return jsonify({"error": "Recipe is not ready to publish",
                             **state}), 409
-    _activate(tid, draft, forced=not state["check"]["ok"])
+    accepted = None
+    if state["check"].get("needs_ack"):
+        reason = str(body.get("reason") or "").strip()
+        if not body.get("accept_missed") or len(reason) < 5:
+            return jsonify({"error": "Some defect samples are not caught: accept this and give a reason to publish",
+                            **state}), 409
+        accepted = {"missed": state["check"]["needs_ack"], "reason": reason[:500]}
+    _activate(tid, draft, forced=not state["check"]["ok"], accepted=accepted)
     return jsonify({"status": "ok", "version": draft["version"]})
 
 
-def _activate(tid: str, version: dict, forced: bool = False):
+def _activate(tid: str, version: dict, forced: bool = False, accepted: dict | None = None):
     user = getattr(request, "auth_user", "")
     _versions_col.update_many({"recipe_id": tid,
                                "status": recipes_mod.STATUS_ACTIVE},
@@ -2666,7 +2684,8 @@ def _activate(tid: str, version: dict, forced: bool = False):
         {"recipe_id": tid, "version": version["version"]},
         {"$set": {"status": recipes_mod.STATUS_ACTIVE,
                   "published_at": recipes_mod.now_iso(),
-                  "published_by": user, "published_forced": forced}})
+                  "published_by": user, "published_forced": forced,
+                  "published_accepted": accepted}})
     _templates_col.update_one({"id": tid},
                               {"$set": recipes_mod.mirror_update(version)})
 
@@ -2710,7 +2729,9 @@ def _run_calibration(tid: str, user: str):
         old = draft.get("calibration") or {}
         cal, blobs = calibration_mod.calibrate(
             draft, samples, load_photo, progress,
-            margin=old.get("margin") or calibration_mod.MARGIN_DEFAULT)
+            margin=old.get("margin") or calibration_mod.MARGIN_DEFAULT,
+            # limits chosen per zone survive recalibration (same zone index)
+            zone_margins={z["zone"]: z["margin"] for z in old.get("zones", []) if z.get("margin")})
         job.update(message="Saving the model", progress=0.95)
         for z in cal["zones"]:
             key = f"{_r2_tpl_prefix(tid)}v{draft['version']}/calib/zone_{z['zone']}.npz"
@@ -2775,7 +2796,8 @@ def studio_calibration_status(tid):
 
 @app.route("/api/recipes/<tid>/draft/calibration", methods=["PUT"])
 def studio_set_strictness(tid):
-    """Change the margin (strictness) of an existing calibration."""
+    """Change the OK limits of an existing calibration:
+    {"zones": {"<zone index>": OK limit}} per zone, or {"margin": m} for all."""
     err = _studio_guard()
     if err:
         return err
@@ -2784,11 +2806,18 @@ def studio_set_strictness(tid):
     draft = _draft_of(tid)
     if not draft or not draft.get("calibration"):
         return jsonify({"error": "Calibrate first"}), 404
+    body = request.get_json(silent=True) or {}
+    cal = draft["calibration"]
     try:
-        margin = float((request.get_json(silent=True) or {}).get("margin"))
-    except (TypeError, ValueError):
-        return jsonify({"error": "margin must be a number"}), 400
-    cal = calibration_mod.apply_margin(draft["calibration"], margin)
+        if "zones" in body:
+            worst = {z["zone"]: max(z["good_scores"]) for z in cal["zones"] if z["good_scores"]}
+            zone_margins = {int(k): float(v) / worst[int(k)] for k, v in body["zones"].items()
+                            if int(k) in worst and worst[int(k)] > 0}
+            cal = calibration_mod.apply_margin(cal, zone_margins=zone_margins)
+        else:
+            cal = calibration_mod.apply_margin(cal, float(body.get("margin")))
+    except (TypeError, ValueError, AttributeError):
+        return jsonify({"error": "OK limits must be numbers"}), 400
     _versions_col.update_one({"recipe_id": tid, "version": draft["version"]},
                              {"$set": {"calibration": cal}})
     draft["calibration"] = cal

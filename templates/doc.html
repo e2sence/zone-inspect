@@ -557,6 +557,10 @@
                             <li><strong>7 Publish:</strong> shows what blocks publishing and makes the draft live.</li>
                         </ul>
                         <h4>Samples</h4>
+                        <p><strong>Shoot from above.</strong> Hold the phone roughly parallel to the board, as for the
+                            reference. Tall parts (capacitors, relays) show their sides from an angle, and good photos
+                            taken from different angles look so different that real defects get lost in the
+                            variation. Photos shot more than 12° off the board get a "steep" mark.</p>
                         <p>Photograph boards the way operators will: hand-held, normal light. Connect a phone with the
                             QR code in step 4/5 (the phone uses the same camera settings as inspection), or upload from
                             a computer. Each photo is aligned to the reference; the card shows which zones are fully in
@@ -573,22 +577,31 @@
                             the report shows how many false alarms to expect on good boards; a defect is
                             <span class="kw">caught</span> when its score is above the OK limit, and the report shows
                             whether the strongest deviation lies inside the box you drew.</p>
-                        <p>The OK limit is the worst good sample × the strictness factor (default 1.10). Between the OK
-                            limit and 1.25 × that limit the result is WARN, above it DEFECT. Subzones get their own
-                            limits. Move the strictness slider to see the effect at once, then <strong>Save
-                            strictness</strong>. Changing samples, zones or the reference makes the calibration out of
-                            date: recalibrate before publishing.</p>
+                        <p>The score shows how unusual the most unusual spot of the zone is compared with the good
+                            samples; about 1 is typical. Each zone has its own <strong>OK limit</strong>: drag it on the
+                            zone's scale, type it, or pick a ready-made value: <em>No false alarms</em> (just above
+                            the worst good sample), <em>Catch all defects</em> (just below the weakest defect) or
+                            <em>Middle</em>. The counts update at once; then <strong>Save limits</strong>. By default
+                            the limit is the worst good sample × 1.10. Between the OK limit and 1.25 × that limit the
+                            result is WARN, above it DEFECT. Subzones follow their zone's limit.</p>
+                        <p>Under each zone the report lists good samples worth a second look: shot at a steep angle,
+                            or scoring far above the other good samples. One such photo raises the limit for the whole
+                            zone; exclude it if it does not show the zone properly, then recalibrate. Changing samples,
+                            zones or the reference makes the calibration out of date: recalibrate before
+                            publishing.</p>
                         <h4>Requirements for publishing</h4>
                         <ul>
                             <li>At least 15 good samples for every zone.</li>
                             <li>At least 2 defect samples for every zone, and 1 for every critical subzone.</li>
                             <li>Samples from at least 2 different phones.</li>
                             <li>A reference that passed the quality check, and at least one zone.</li>
-                            <li>An up-to-date calibration in which every defect sample is caught (and every critical
-                                subzone catches its defects).</li>
+                            <li>An up-to-date calibration.</li>
                         </ul>
-                        <p>Fewer than 3 different good boards is a warning. A lead publishes on their own once
-                            nothing blocks; an admin may publish with unmet requirements.</p>
+                        <p>If some defect samples pass as OK at the chosen limits, the lead can still publish: tick
+                            that the misses are accepted and give a reason. The reason is kept with the version and shown
+                            in the version list. Fewer than 3 different good boards and good samples shot at a steep
+                            angle are warnings. A lead publishes on their own once nothing blocks; an admin may publish
+                            with unmet requirements.</p>
                         <h4>Changing the reference</h4>
                         <p>Samples are tied to the reference they were aligned to. After a new reference, re-align
                             them with one click in step 4; until then they are not counted.</p>
@@ -1200,6 +1213,10 @@ curl -s "$HOST/api/v1/results"
                                 линию.</li>
                         </ul>
                         <h4>Образцы</h4>
+                        <p><strong>Снимайте сверху.</strong> Держите телефон примерно параллельно плате, как при съёмке
+                            эталона. Под углом у высоких деталей (конденсаторы, реле) виден бок, и хорошие снимки с разных
+                            ракурсов так сильно отличаются, что настоящие дефекты теряются в этом разбросе. Снимки,
+                            сделанные под углом больше 12° к плате, получают пометку «steep».</p>
                         <p>Снимайте так же, как будут снимать операторы: с рук, при обычном свете. Подключите телефон
                             по QR-коду на шаге 4/5 (телефон использует те же настройки камеры, что и при инспекции) или
                             загрузите фото с компьютера. Каждое фото выравнивается по эталону; на карточке видно, какие
@@ -1217,22 +1234,31 @@ curl -s "$HOST/api/v1/results"
                             отчёт показывает, сколько ложных тревог ждать на исправных платах; дефект
                             <span class="kw">пойман</span>, если его оценка выше порога OK, и отчёт показывает,
                             попало ли самое сильное отклонение в нарисованную рамку.</p>
-                        <p>Порог OK — худший хороший образец × коэффициент строгости (по умолчанию 1.10). Между
-                            порогом OK и 1.25 × порог — WARN, выше — DEFECT. У подзон свои пороги. Сдвиньте ползунок
-                            строгости, чтобы сразу увидеть эффект, затем <strong>Save strictness</strong>. Изменение
-                            образцов, зон или эталона делает калибровку устаревшей: перед публикацией откалибруйте
-                            заново.</p>
+                        <p>Оценка показывает, насколько необычно самое необычное место зоны по сравнению с хорошими
+                            образцами; около 1 — обычное значение. У каждой зоны свой <strong>порог OK</strong>:
+                            перетащите его на шкале зоны, введите число или выберите готовое значение:
+                            <em>No false alarms</em> (чуть выше худшего хорошего образца), <em>Catch all defects</em>
+                            (чуть ниже самого слабого дефекта) или <em>Middle</em> (посередине). Цифры обновляются сразу,
+                            затем <strong>Save limits</strong>. По умолчанию порог — худший хороший образец × 1.10.
+                            Между порогом OK и 1.25 × порог — WARN, выше — DEFECT. Подзоны следуют порогу своей зоны.</p>
+                        <p>Под каждой зоной отчёт показывает хорошие образцы, на которые стоит взглянуть: снятые под
+                            крутым углом или с оценкой намного выше остальных хороших. Один такой снимок поднимает порог
+                            для всей зоны; исключите его, если зона на нём видна неправильно, и откалибруйте заново.
+                            Изменение образцов, зон или эталона делает калибровку устаревшей: перед публикацией
+                            откалибруйте заново.</p>
                         <h4>Требования для публикации</h4>
                         <ul>
                             <li>Не меньше 15 хороших образцов на каждую зону.</li>
                             <li>Не меньше 2 дефектных образцов на каждую зону и 1 на каждую критичную подзону.</li>
                             <li>Образцы минимум с 2 разных телефонов.</li>
                             <li>Эталон прошёл проверку качества, есть хотя бы одна зона.</li>
-                            <li>Актуальная калибровка, в которой пойманы все дефектные образцы (и каждая критичная
-                                подзона ловит свои дефекты).</li>
+                            <li>Актуальная калибровка.</li>
                         </ul>
-                        <p>Меньше 3 разных исправных плат — предупреждение. Ведущий публикует сам, когда ничего не
-                            блокирует; админ может опубликовать и с невыполненными требованиями.</p>
+                        <p>Если при выбранных порогах часть дефектных образцов проходит как OK, ведущий всё равно может
+                            опубликовать: отметить, что пропуски приняты, и указать причину. Причина сохраняется вместе с
+                            версией и видна в списке версий. Меньше 3 разных исправных плат и хорошие образцы, снятые под
+                            крутым углом, — предупреждения. Ведущий публикует сам, когда ничего не блокирует; админ может
+                            опубликовать и с невыполненными требованиями.</p>
                         <h4>Смена эталона</h4>
                         <p>Образцы привязаны к эталону, по которому выровнены. После замены эталона выровняйте их
                             заново одной кнопкой на шаге 4; до этого они не учитываются.</p>

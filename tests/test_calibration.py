@@ -77,6 +77,35 @@ def test_margin_changes_outcomes_without_features(setup):
     assert strict["zones"][0]["false_alarms"] >= 1      # below the worst good sample
 
 
+def test_zone_limit_and_missed_detail(setup):
+    C, *_, calib, _ = setup
+    import copy
+    cal = copy.deepcopy(calib)
+    z = cal["zones"][0]
+    worst = max(z["good_scores"])
+    for d in z["defects"]:          # synthetic defects are far too obvious for the limit range
+        d["score"] = worst * 1.5
+        d["sub_scores"] = [worst * 1.5 for _ in d["sub_scores"]]
+    above = worst * 1.6
+    cal = C.apply_margin(cal, zone_margins={0: above / worst})
+    z = cal["zones"][0]
+    assert abs(z["t_ok"] - above) < 1e-3 and z["caught"] == 0
+    assert cal["missed"] == 2                       # the zone and its critical subzone
+    assert cal["missed_detail"][0] == "Z1: 2 of 2 defect samples pass as OK"
+    # a new default margin drops per-zone choices
+    assert "margin" not in C.apply_margin(cal, 1.1)["zones"][0]
+
+
+def test_suspect_good_samples():
+    import calibration as C
+    goods = [{"id": str(i), "view_angle": 3.0} for i in range(10)]
+    goods[3]["view_angle"] = 30.0
+    scores = [1.0, 1.05, 0.95, 1.1, 1.02, 0.98, 1.01, 1.04, 0.97, 2.4]
+    sus = {s["sample_id"]: s["reasons"] for s in C._suspects(goods, scores)}
+    assert set(sus) == {"3", "9"}
+    assert "30°" in sus["3"][0] and "far above" in sus["9"][0]
+
+
 def test_zone_model_inspects_new_photos(setup):
     C, nn, board, sift, version, calib, blobs = setup
     model = C.ZoneModel(ZONE, version["ref_size"], calib["zones"][0], blobs[0])
