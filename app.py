@@ -184,7 +184,7 @@ def _bind_token(token: str, sid: str):
 
 
 # session_id → list of uploaded photo blobs (bytes) from mobile
-mobile_photos: dict[str, list[bytes]] = {}
+mobile_photos: dict[str, list[dict]] = {}   # sid → check results of phone photos, not yet shown on the desktop
 
 # Thread pool for background R2 uploads (non-blocking save)
 _r2_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="r2")
@@ -1294,7 +1294,7 @@ def _check_zone_calibrated(s: dict, photo, from_mobile: bool, photo_path):
     return jsonify(result)
 
 
-def _check_zone_impl(sid, photo_img=None):
+def _check_zone_impl(sid, photo_img=None, sens_override=None):
     if sid not in sessions:
         return jsonify({"error": "Session not found"}), 404
 
@@ -1312,6 +1312,8 @@ def _check_zone_impl(sid, photo_img=None):
     import inspection_config as _cfg
     zone_sens = s.get("zone_sensitivity")
     subzone_sens = s.get("subzone_sensitivity")
+    if sens_override:     # set by a lead/admin desktop for photos from its phone
+        zone_sens, subzone_sens = sens_override
     if getattr(request, "auth_role", "") in ("admin", "lead"):
         # Form data first (desktop upload), then query args (mobile path)
         try:
@@ -3361,10 +3363,20 @@ def mobile_detect_anchors(token):
 
 @app.route("/api/mobile/<token>/serial", methods=["POST"])
 def mobile_serial(token):
-    """Upload serial number photo from mobile."""
+    """Serial number from the phone: a photo to read on the server, or
+    {"code", "code_type"} already read on the phone (BarcodeDetector / zxing-wasm)."""
     sid = _get_token_session(token)
     if not sid or sid not in sessions:
         return jsonify({"error": "Invalid link"}), 404
+
+    code = (request.form.get("code") or "").strip()
+    if code:
+        if len(code) > 200:
+            return jsonify({"error": "Code too long"}), 400
+        code_type = (request.form.get("code_type") or "barcode").strip()[:40]
+        sessions[sid]["serial"] = code
+        sessions[sid]["serial_type"] = code_type
+        return jsonify({"serial": code, "type": code_type})
 
     file = request.files.get("photo")
     if not file:
@@ -3433,7 +3445,9 @@ def mobile_skip_board(token):
 
 @app.route("/api/mobile/<token>/zone_photo", methods=["POST"])
 def mobile_zone_photo(token):
-    """Upload a zone photo from mobile → stored for desktop to pick up."""
+    """Zone photo from the phone: checked right away. The verdict goes back to
+    the phone in the response; the full result is queued for the desktop,
+    which shows it on its next poll."""
     sid = _get_token_session(token)
     if not sid or sid not in sessions:
         return jsonify({"error": "Invalid link"}), 404
@@ -3441,23 +3455,51 @@ def mobile_zone_photo(token):
     file = request.files.get("photo")
     if not file:
         return jsonify({"error": "Photo not found"}), 400
-
-    photo_bytes = file.read()
-    if sid not in mobile_photos:
-        mobile_photos[sid] = []
-    mobile_photos[sid].append(photo_bytes)
-    # Cap queue to prevent unbounded memory growth
-    while len(mobile_photos[sid]) > 30:
-        mobile_photos[sid].pop(0)
-
-    return jsonify({"status": "ok", "count": len(mobile_photos[sid])})
+    img = cv2.imdecode(np.frombuffer(file.read(), np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return jsonify({"error": "Failed to read image"}), 400
+    s = sessions[sid]
+    # Downscale large phone photos (up to 2× the reference) to speed up SIFT
+    ref_h, ref_w = s["ref_img"].shape[:2]
+    h, w = img.shape[:2]
+    max_dim = max(ref_h, ref_w) * 2
+    if max(h, w) > max_dim:
+        k = max_dim / max(h, w)
+        img = cv2.resize(img, (int(w * k), int(h * k)))
+    try:
+        out = _check_zone_impl(sid, photo_img=img, sens_override=s.get("_mobile_sens"))
+    except Exception as e:
+        app.logger.exception("Phone photo check failed")
+        return jsonify({"error": f"Internal error: {e}"}), 500
+    resp, code = out if isinstance(out, tuple) else (out, 200)
+    data = resp.get_json()
+    if code != 200:
+        return jsonify({"error": data.get("error", "Check failed")}), code
+    queue = mobile_photos.setdefault(sid, [])
+    queue.append(data)
+    while len(queue) > 30:      # desktop not polling: keep memory bounded
+        queue.pop(0)
+    defect = data.get("defect") or {}
+    return jsonify({"status": "ok", "matched": data.get("matched"),
+                    "zone": data.get("best_zone_label"),
+                    "result": defect.get("status"), "verdict": defect.get("verdict"),
+                    "checked_zones": data.get("checked_zones", []),
+                    "view_dev": data.get("view_dev")})
 
 
 @app.route("/api/session/<sid>/mobile_photos", methods=["GET"])
 def get_mobile_photos(sid):
-    """Desktop polls this to check for new photos from mobile."""
+    """Desktop polls this for phone results and the serial. A lead/admin
+    desktop passes its strictness override, applied to the phone's photos."""
     if sid not in sessions:
         return jsonify({"error": "Session not found"}), 404
+    if getattr(request, "auth_role", "") in ("admin", "lead"):
+        try:
+            zs, ss = request.args.get("zone_sensitivity"), request.args.get("subzone_sensitivity")
+            sessions[sid]["_mobile_sens"] = ((max(0.0, min(2.0, float(zs))), max(0.0, min(2.0, float(ss))))
+                                             if zs is not None and ss is not None else None)
+        except (TypeError, ValueError):
+            pass
 
     photos = mobile_photos.get(sid, [])
     serial = sessions[sid].get("serial", "")
@@ -3472,29 +3514,14 @@ def get_mobile_photos(sid):
 
 @app.route("/api/session/<sid>/mobile_photos/next", methods=["POST"])
 def pop_mobile_photo(sid):
-    """Desktop fetches the next mobile photo (FIFO) and processes it as a zone check."""
+    """Desktop takes the next phone result (FIFO), already checked on upload."""
     if sid not in sessions:
         return jsonify({"error": "Session not found"}), 404
 
     photos = mobile_photos.get(sid, [])
     if not photos:
         return jsonify({"error": "No photos in queue"}), 404
-
-    photo_bytes = photos.pop(0)
-    img = cv2.imdecode(np.frombuffer(photo_bytes, np.uint8), cv2.IMREAD_COLOR)
-    if img is None:
-        return jsonify({"error": "Failed to read image"}), 400
-
-    # Downscale large mobile photos to match reference size (speed up SIFT)
-    ref_img = sessions[sid]["ref_img"]
-    ref_h, ref_w = ref_img.shape[:2]
-    h, w = img.shape[:2]
-    max_dim = max(ref_h, ref_w) * 2  # Allow up to 2x reference size
-    if max(h, w) > max_dim:
-        scale = max_dim / max(h, w)
-        img = cv2.resize(img, (int(w * scale), int(h * scale)))
-
-    return _check_zone_impl(sid, photo_img=img)
+    return jsonify(photos.pop(0))
 
 
 # ─── R2 diagnostics ───────────────────────────────────────────────────────

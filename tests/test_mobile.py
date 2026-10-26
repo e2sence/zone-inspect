@@ -53,18 +53,35 @@ class TestMobileZonePhoto:
         resp = authed_client.post(f"/api/session/{sid}/mobile_qr")
         return resp.get_json()["token"]
 
-    def test_upload_photo(self, client, token, test_image_bytes):
+    def test_photo_is_checked_on_upload(self, client, authed_client, token, test_image_bytes,
+                                        session_with_zones):
+        sid, _ = session_with_zones
         resp = client.post(
             f"/api/mobile/{token}/zone_photo",
             data={"photo": (io.BytesIO(test_image_bytes), "photo.jpg")},
             content_type="multipart/form-data",
         )
         assert resp.status_code == 200
-        assert resp.get_json()["count"] >= 1
+        data = resp.get_json()
+        assert data["status"] == "ok" and "matched" in data      # verdict comes back to the phone
+        # the desktop picks up the finished result, no processing on its side
+        assert authed_client.get(f"/api/session/{sid}/mobile_photos").get_json()["count"] == 1
+        result = authed_client.post(f"/api/session/{sid}/mobile_photos/next").get_json()
+        assert "matched" in result and "all_scores" in result
+        assert authed_client.post(f"/api/session/{sid}/mobile_photos/next").status_code == 404
 
     def test_upload_no_photo(self, client, token):
         resp = client.post(f"/api/mobile/{token}/zone_photo")
         assert resp.status_code == 400
+
+
+class TestMobileSerial:
+    def test_serial_read_on_the_phone(self, client, authed_client, session_with_zones):
+        sid, _ = session_with_zones
+        token = authed_client.post(f"/api/session/{sid}/mobile_qr").get_json()["token"]
+        r = client.post(f"/api/mobile/{token}/serial", data={"code": "7334001122", "code_type": "Code128"})
+        assert r.get_json() == {"serial": "7334001122", "type": "Code128"}
+        assert authed_client.get(f"/api/session/{sid}/mobile_photos").get_json()["serial"] == "7334001122"
 
 
 class TestMobilePhotosPolling:

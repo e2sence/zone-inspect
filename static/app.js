@@ -1192,7 +1192,7 @@
 
         function startMobilePoll() {
             if (mobilePollTimer) return;
-            mobilePollTimer = setInterval(pollMobileUpdates, 5000);
+            mobilePollTimer = setInterval(pollMobileUpdates, 1500);   // cheap: in-memory queue, results are computed on upload
         }
 
         function stopMobilePoll() {

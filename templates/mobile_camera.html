@@ -465,12 +465,13 @@
         </div>
     </div>
 
+    <!-- Barcode reader in the browser (iPhone Safari has no BarcodeDetector); the .wasm loads on first use -->
+    <script src="/static/vendor/zxing-wasm-3.1.4/reader.js"></script>
     <script>
         let TOKEN = '';
         let SESSION_ID = '';
         let BASE_URL = '';
-        let serialStream = null;
-        let zoneStream = null;
+        let camStream = null;      // one camera stream shared by the serial and zone views
         let photosSent = 0;
         let zonesTotal = 0;
         let zonesChecked = 0;
@@ -481,6 +482,7 @@
         let scanTimer = null;
         let scanBusy = false;
         let nativeBarcodeDetector = null;
+        let wasmReader = false;    // zxing-wasm available
 
         // ═══════════════════════════════════════════════════════════
         //  SCANNER BEEP SOUND (Web Audio API)
@@ -552,6 +554,16 @@
                         console.log('Native BarcodeDetector:', formats.join(', '));
                     }
                 }).catch(() => { });
+            }
+
+            if (!('BarcodeDetector' in window) && window.ZXingWASM) {
+                try {
+                    ZXingWASM.prepareZXingModule({
+                        overrides: { locateFile: (path, prefix) => path.endsWith('.wasm')
+                            ? '/static/vendor/zxing-wasm-3.1.4/zxing_reader.wasm' : prefix + path },
+                        fireImmediately: true,
+                    }).then(() => { wasmReader = true; }).catch(e => console.warn('zxing-wasm:', e));
+                } catch (e) { console.warn('zxing-wasm:', e); }
             }
 
             fetchSessionInfo();
@@ -627,12 +639,11 @@
             const videoId = mode === 'serial' ? 'serial-video' : 'zone-video';
             const video = document.getElementById(videoId);
 
-            if (mode === 'serial' && zoneStream) {
-                zoneStream.getTracks().forEach(t => t.stop());
-                zoneStream = null;
-            } else if (mode === 'zone' && serialStream) {
-                serialStream.getTracks().forEach(t => t.stop());
-                serialStream = null;
+            // Reuse the running camera: restarting it on every switch costs a second or more on phones
+            if (camStream && camStream.getVideoTracks().some(t => t.readyState === 'live')) {
+                if (video.srcObject !== camStream) video.srcObject = camStream;
+                try { await video.play(); } catch (e) { /* already playing */ }
+                return;
             }
 
             try {
@@ -651,8 +662,7 @@
                 }
                 video.srcObject = stream;
                 await video.play();
-                if (mode === 'serial') serialStream = stream;
-                else zoneStream = stream;
+                camStream = stream;
             } catch (e) {
                 console.warn('Camera error:', e);
             }
@@ -686,7 +696,7 @@
                     await scanFrame();
                 }
                 scanLoop();
-            }, nativeBarcodeDetector ? 100 : 500);
+            }, nativeBarcodeDetector || wasmReader ? 100 : 150);
         }
 
         async function scanFrame() {
@@ -707,6 +717,22 @@
                 } catch (e) { /* fallback to server */ }
             }
 
+            // zxing-wasm in the browser: no upload per frame
+            if (wasmReader) {
+                scanBusy = true;
+                try {
+                    const frame = grabFrameData();
+                    if (frame) {
+                        const res = await ZXingWASM.readBarcodes(frame, { tryHarder: true, maxNumberOfSymbols: 1 });
+                        const hit = res.find(r => r.isValid && r.text);
+                        if (hit) { scanBusy = false; onBarcodeFound(hit.text, 'native', hit.format); return; }
+                    }
+                    scanBusy = false;
+                    return;
+                } catch (e) { console.warn('zxing-wasm read:', e); wasmReader = false; }
+                scanBusy = false;
+            }
+
             // Fallback: server-side detection (throttled)
             scanBusy = true;
             try {
@@ -725,7 +751,7 @@
             scanBusy = false;
         }
 
-        function grabFrame() {
+        function drawFrame() {
             const video = document.getElementById('serial-video');
             const canvas = document.getElementById('serial-canvas');
             const vw = video.videoWidth, vh = video.videoHeight;
@@ -741,7 +767,8 @@
                 sh = Math.round(vw / dispRatio);
                 sy = Math.round((vh - sh) / 2);
             }
-            const maxDim = 2048;
+            // The server reads codes at up to 1200 px: larger frames only slow the upload
+            const maxDim = 1280;
             let outW = sw, outH = sh;
             if (Math.max(sw, sh) > maxDim) {
                 const s = maxDim / Math.max(sw, sh);
@@ -751,12 +778,23 @@
             canvas.width = outW;
             canvas.height = outH;
             canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, outW, outH);
+            return canvas;
+        }
+
+        function grabFrame() {
+            const canvas = drawFrame();
+            if (!canvas) return null;
             return new Promise(resolve => {
-                canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.90);
+                canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.85);
             });
         }
 
-        async function onBarcodeFound(rawValue, type) {
+        function grabFrameData() {
+            const canvas = drawFrame();
+            return canvas ? canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height) : null;
+        }
+
+        async function onBarcodeFound(rawValue, type, format) {
             stopScan();
             playBeep();
             const reticle = document.getElementById('scan-reticle');
@@ -764,15 +802,15 @@
             reticle.classList.add('found');
             label.textContent = 'Found!';
 
-            // If detected natively, register with server
+            // Read on the phone: register the decoded text (no second upload/decoding)
             if (type === 'native') {
                 const resultDiv = document.getElementById('serial-result-mobile');
-                resultDiv.innerHTML = `<div class="result-box result-info"><span class="spinner"></span> Verifying...</div>`;
+                resultDiv.innerHTML = `<div class="result-box result-ok">Serial: <strong>${rawValue}</strong></div>`;
                 resultDiv.classList.remove('hidden');
                 try {
-                    const blob = await grabFrame();
                     const fd = new FormData();
-                    fd.append('photo', blob, 'scan.jpg');
+                    fd.append('code', rawValue);
+                    fd.append('code_type', format || 'barcode');
                     const r = await fetch(`${BASE_URL}/api/mobile/${TOKEN}/serial`, {
                         method: 'POST', body: fd
                     });
@@ -780,10 +818,10 @@
                     if (!d.error && d.serial) {
                         resultDiv.innerHTML = `<div class="result-box result-ok">Serial: <strong>${d.serial}</strong> (${d.type})</div>`;
                         hasSerial = true;
-                        setTimeout(() => switchMode('zone'), 800);
+                        setTimeout(() => switchMode('zone'), 300);
                         return;
                     }
-                } catch (e) { /* use native value */ }
+                } catch (e) { /* retry below */ }
                 // Couldn't verify — restart scanning
                 resultDiv.innerHTML = `<div class="result-box result-err">❌ Could not verify. Retrying...</div>`;
                 setTimeout(() => { reticle.classList.remove('found'); startScan(); }, 1500);
@@ -795,7 +833,7 @@
             resultDiv.innerHTML = `<div class="result-box result-ok">Serial: <strong>${rawValue}</strong> (${type})</div>`;
             resultDiv.classList.remove('hidden');
             hasSerial = true;
-            setTimeout(() => switchMode('zone'), 800);
+            setTimeout(() => switchMode('zone'), 300);
         }
 
         // ═══════════════════════════════════════════════════════════
@@ -1071,7 +1109,7 @@
         async function captureZone() {
             const btn = document.getElementById('btn-zone-capture');
             btn.disabled = true;
-            btn.innerHTML = '<span class="spinner"></span> Sending…';
+            btn.innerHTML = '<span class="spinner"></span> Checking…';
             try {
                 const blob = await captureFrame('zone-video', 'zone-canvas');
                 playBeep();
@@ -1126,9 +1164,12 @@
                 if (d.error) {
                     showZoneResult(`❌ ${d.error}`, 'err');
                 } else {
+                    // The server checked the photo already: show its verdict at once
                     photosSent++;
                     document.getElementById('zone-photo-count').textContent = photosSent;
-                    showZoneResult(`Photo #${photosSent} uploaded`, 'ok');
+                    if (!d.matched) showZoneResult(`Photo #${photosSent}: no zone recognised — retake`, 'err');
+                    else showZoneResult(`${d.zone}: ${(d.result || '').toUpperCase()}${d.verdict ? ' — ' + d.verdict : ''}`,
+                        d.result === 'ok' ? 'ok' : 'err');
                     await pollProgress();
                 }
             } catch (e) {
@@ -1221,7 +1262,7 @@
                             document.getElementById('serial-result-mobile').classList.add('hidden');
                             document.getElementById('zone-result-mobile').innerHTML = '';
                             switchMode('serial');
-                        }, 1500);
+                        }, 500);
                     }
                     return;
                 }
@@ -1250,7 +1291,7 @@
                         document.getElementById('serial-result-mobile').classList.add('hidden');
                         document.getElementById('zone-result-mobile').innerHTML = '';
                         switchMode('serial');
-                    }, 1500);
+                    }, 500);
                 } else if (state === 'waiting_decision' && lastInspectionState !== 'waiting_decision') {
                     // All zones checked — waiting for user action (issues or auto-accept off)
                     lastInspectionState = 'waiting_decision';
@@ -1333,7 +1374,7 @@
         let bgPollTimer = null;
         function startBgPoll() {
             if (bgPollTimer) return;
-            bgPollTimer = setInterval(pollProgress, 5000);
+            bgPollTimer = setInterval(pollProgress, 2000);
         }
 
         init();
