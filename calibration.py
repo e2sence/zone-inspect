@@ -194,10 +194,15 @@ def fingerprint(version: dict, samples: list) -> str:
 
 # ─── Calibration ─────────────────────────────────────────────────────────────
 
-def calibrate(version: dict, samples: list, load_photo, progress=lambda msg: None,
+# Share of a zone's time per stage, for the progress bar
+_STAGES = (("load", 0.25), ("features", 0.45), ("loo", 0.2), ("defects", 0.1))
+
+
+def calibrate(version: dict, samples: list, load_photo, progress=lambda msg, frac=None: None,
               margin: float = MARGIN_DEFAULT):
     """Build per-zone models from derived samples.
-    load_photo(sample) → BGR image. Returns (calib dict, {zone index: npz bytes})."""
+    load_photo(sample) → BGR image. progress(message, fraction 0..1) is called
+    after every photo. Returns (calib dict, {zone index: npz bytes})."""
     zones = version["zones"]
     ref_wh = version["ref_size"]
     calib = {"model": MODEL, "margin": margin, "zones": [], "skipped": []}
@@ -209,13 +214,23 @@ def calibrate(version: dict, samples: list, load_photo, progress=lambda msg: Non
             photos[s["id"]] = load_photo(s)
         return photos[s["id"]]
 
+    usable = [s for s in samples if not s.get("excluded") and s.get("aligned")]
+
+    def report(zi, stage, i, n, msg):
+        start = 0.0
+        for name, w in _STAGES:
+            if name == stage:
+                frac = (zi + start + w * i / max(n, 1)) / max(len(zones), 1)
+                progress(msg, round(min(frac, 1.0), 3))
+                return
+            start += w
+
     for zi, zone in enumerate(zones):
         geom = ZoneGeom(zone, ref_wh)
         label = zone.get("label", f"Zone {zi + 1}")
         goods, defects = [], []
-        for s in samples:
-            if s.get("excluded") or not s.get("aligned"):
-                continue
+        for k, s in enumerate(usable):
+            report(zi, "load", k, len(usable), f"{label}: loading photo {k + 1} of {len(usable)}")
             H = s["align"]["H"]
             img = photo(s)
             cov, share = geom.coverage(img.shape, H)
@@ -229,11 +244,15 @@ def calibrate(version: dict, samples: list, load_photo, progress=lambda msg: Non
             calib["skipped"].append({"zone": zi, "label": label,
                                      "reason": f"{len(goods)} good samples (need {MIN_GOOD_TO_CALIBRATE}+)"})
             continue
-        progress(f"{label}: features of {len(goods) + len(defects)} photos")
-        FG = [features(geom.crop(img, s["align"]["H"]), geom) for s, img, _ in goods]
-        FD = [features(geom.crop(img, s["align"]["H"]), geom) for s, img, _ in defects]
-        progress(f"{label}: checking each good sample against the others")
-        loo = [anomaly_map(f, FG[:i] + FG[i + 1:]) for i, f in enumerate(FG)]
+        n_feat = len(goods) + len(defects)
+        FG, FD = [], []
+        for k, (s, img, _) in enumerate(goods + defects):
+            report(zi, "features", k, n_feat, f"{label}: analysing photo {k + 1} of {n_feat}")
+            (FG if k < len(goods) else FD).append(features(geom.crop(img, s["align"]["H"]), geom))
+        loo = []
+        for i, f in enumerate(FG):
+            report(zi, "loo", i, len(FG), f"{label}: comparing good sample {i + 1} of {len(FG)} with the others")
+            loo.append(anomaly_map(f, FG[:i] + FG[i + 1:]))
         norm = normaliser(loo)
         good_scores, good_sub = [], []
         for i, (raw, (s, img, cov)) in enumerate(zip(loo, goods)):
@@ -242,9 +261,9 @@ def calibrate(version: dict, samples: list, load_photo, progress=lambda msg: Non
             zsc, subs, _ = scores(raw, n_i, geom.valid_mask(cov), geom)
             good_scores.append(round(zsc, 4))
             good_sub.append([round(x, 4) for x in subs])
-        progress(f"{label}: checking defect samples")
         drows = []
-        for (s, img, cov), f in zip(defects, FD):
+        for k, ((s, img, cov), f) in enumerate(zip(defects, FD)):
+            report(zi, "defects", k, len(FD), f"{label}: checking defect sample {k + 1} of {len(FD)}")
             zsc, subs, m = scores(anomaly_map(f, FG), norm, geom.valid_mask(cov), geom)
             yy, xx = np.unravel_index(int(m.argmax()), m.shape)
             px, py = (xx + .5) / m.shape[1], (yy + .5) / m.shape[0]

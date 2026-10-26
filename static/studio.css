@@ -61,6 +61,14 @@ a.st-link#back-to-list { border: none; padding-left: 0; }
 .st-progress { height: 6px; background: var(--card2); border-radius: 3px; overflow: hidden; border: 1px solid var(--border); }
 .st-progress i { display: block; height: 100%; background: var(--success); }
 .st-progress.partial i { background: var(--warn); }
+.st-calib-run { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 10px; font-size: 13px; }
+.st-progress-live { height: 10px; border-radius: 5px; }
+.st-progress-live i { background-color: var(--accent); transition: width .8s ease;
+    background-image: linear-gradient(45deg, rgba(255,255,255,.22) 25%, transparent 25%, transparent 50%,
+        rgba(255,255,255,.22) 50%, rgba(255,255,255,.22) 75%, transparent 75%);
+    background-size: 20px 20px; animation: st-stripes 1s linear infinite; }
+@keyframes st-stripes { to { background-position: 20px 0; } }
+@media (prefers-reduced-motion: reduce) { .st-progress-live i { animation: none; } }
 .st-panel { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg2); padding: 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .st-capture { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: start; }
 @media (max-width: 760px) { .st-capture { grid-template-columns: 1fr; } }

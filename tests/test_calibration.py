@@ -8,6 +8,8 @@ from tests.synth import make_board, shoot
 
 pytestmark = pytest.mark.unit
 
+TICKS = []      # progress calls of the calibration in setup
+
 ZONE = {"x": 0.10, "y": 0.15, "w": 0.35, "h": 0.40, "label": "Z1",
         "subzones": [{"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5, "label": "S1", "critical": True}]}
 
@@ -41,7 +43,9 @@ def setup():
     box = {"x": ZONE["x"] + 0.05, "y": ZONE["y"] + 0.06, "w": 0.08, "h": 0.1}
     defects = [sample(100 + i, "defect", shoot(board, ZONE, defect=True, quality=85 - i), box)
                for i in range(2)]
-    calib, blobs = C.calibrate(version, goods + defects, lambda s: photos[s["id"]])
+    ticks = TICKS
+    calib, blobs = C.calibrate(version, goods + defects, lambda s: photos[s["id"]],
+                               lambda msg, frac=None: ticks.append((msg, frac)))
     return C, nn, board, sift, version, calib, blobs
 
 
@@ -54,6 +58,14 @@ def test_calibration_catches_defects_without_false_alarms(setup):
     assert z["subzones"][0]["caught"] == 2          # critical subzone sees it too
     assert calib["missed"] == 0
     assert 0 in blobs
+
+
+def test_progress_reported_per_photo(setup):
+    assert TICKS
+    fracs = [f for _, f in TICKS]
+    assert len(fracs) >= 10 + 10 + 8 + 2          # load, features, good vs others, defects
+    assert fracs == sorted(fracs) and 0 <= fracs[0] < 0.1 and fracs[-1] > 0.9
+    assert all(msg.startswith("Z1: ") for msg, _ in TICKS)
 
 
 def test_margin_changes_outcomes_without_features(setup):

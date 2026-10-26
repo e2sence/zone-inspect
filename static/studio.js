@@ -1,7 +1,7 @@
 /* ═══ Recipe Studio ═══
  * Recipe list → recipe (versions) → draft wizard:
  * 1 Details · 2 Reference · 3 Zones · 4 Good samples · 5 Defect samples ·
- * 6 Calibrate (later release) · 7 Publish.
+ * 6 Calibrate · 7 Publish.
  */
 (function () {
     const ROLE = (window.STUDIO || {}).role;
@@ -544,10 +544,10 @@
             applyState(d);
             draft.calibration = d.calibration;
             const running = d.job && d.job.state === 'running';
-            $('calib-job').textContent = d.job ? (running ? `Running: ${d.job.message}…` :
-                d.job.state === 'error' ? d.job.message : '') : '';
+            showCalibRun(running ? d.job : null);
+            $('calib-job').textContent = d.job && d.job.state === 'error' ? d.job.message : '';
             $('btn-calibrate').disabled = running;
-            if (running && !calibPoll) calibPoll = setInterval(loadCalibration, 1500);
+            if (running && !calibPoll) calibPoll = setInterval(loadCalibration, 1000);
             if (!running && calibPoll) {
                 clearInterval(calibPoll); calibPoll = null;
                 if (d.job.state === 'done') toast('Calibration finished', 'success');
@@ -562,11 +562,27 @@
     $('btn-calibrate').addEventListener('click', async () => {
         try {
             await api(`/api/recipes/${rec.id}/calibrate`, { method: 'POST' });
-            $('calib-job').textContent = 'Running: starting…';
+            showCalibRun({ progress: 0, message: 'Starting', elapsed: 0 });
+            $('calib-job').textContent = '';
             $('btn-calibrate').disabled = true;
-            if (!calibPoll) calibPoll = setInterval(loadCalibration, 1500);
+            if (!calibPoll) calibPoll = setInterval(loadCalibration, 1000);
         } catch (e) { toast(e.message, 'error'); }
     });
+
+    const fmtSecs = s => s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
+
+    function showCalibRun(job) {
+        $('calib-run').classList.toggle('hidden', !job);
+        if (!job) return;
+        const p = Math.max(0, Math.min(1, job.progress || 0));
+        $('calib-run-pct').textContent = `${Math.round(p * 100)}%`;
+        $('calib-run-bar').style.width = `${Math.max(p * 100, 2)}%`;
+        $('calib-run-msg').textContent = `${job.message}…`;
+        const el = job.elapsed || 0;
+        // estimate only once there is enough progress to extrapolate from
+        const left = p > 0.08 && p < 1 ? el * (1 - p) / p : null;
+        $('calib-run-time').textContent = `${fmtSecs(el)} elapsed` + (left !== null ? ` · about ${fmtSecs(left)} left` : '');
+    }
 
     // Same rules as calibration.apply_margin, for live feedback while sliding
     function outcomes(cal, m) {

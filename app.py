@@ -2702,13 +2702,16 @@ def _run_calibration(tid: str, user: str):
             data = r2.download_bytes(sm["photo_key"])
             return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
 
-        def progress(msg):
+        def progress(msg, frac=None):
             job["message"] = msg
+            if frac is not None:
+                job["progress"] = round(frac * 0.95, 3)     # the rest is saving
 
         old = draft.get("calibration") or {}
         cal, blobs = calibration_mod.calibrate(
             draft, samples, load_photo, progress,
             margin=old.get("margin") or calibration_mod.MARGIN_DEFAULT)
+        job.update(message="Saving the model", progress=0.95)
         for z in cal["zones"]:
             key = f"{_r2_tpl_prefix(tid)}v{draft['version']}/calib/zone_{z['zone']}.npz"
             r2.upload_bytes(key, blobs[z["zone"]], "application/octet-stream")
@@ -2718,7 +2721,7 @@ def _run_calibration(tid: str, user: str):
         cal["created_by"] = user
         _versions_col.update_one({"recipe_id": tid, "version": draft["version"]},
                                  {"$set": {"calibration": cal}})
-        job.update(state="done", message="Calibration finished", finished=time.time())
+        job.update(state="done", message="Calibration finished", progress=1.0, finished=time.time())
     except Exception as e:  # report to the UI, keep the service alive
         app.logger.exception("Calibration failed for %s", tid)
         job.update(state="error", message=f"Calibration failed: {e}", finished=time.time())
@@ -2744,7 +2747,7 @@ def studio_calibrate(tid):
         if job and job["state"] == "running":
             return jsonify({"status": "running", "job": job}), 202
         _calib_jobs[tid] = job = {"state": "running", "message": "Starting",
-                                  "started": time.time()}
+                                  "progress": 0.0, "started": time.time()}
     threading.Thread(target=_run_calibration,
                      args=(tid, getattr(request, "auth_user", "")),
                      daemon=True, name=f"calib-{tid}").start()
@@ -2762,7 +2765,10 @@ def studio_calibration_status(tid):
     if not draft:
         return jsonify({"error": "No draft"}), 404
     state = _draft_state(tid, draft)
-    return jsonify({"job": _calib_jobs.get(tid), "calibration": draft.get("calibration"),
+    job = _calib_jobs.get(tid)
+    if job:   # server-side elapsed time, so client clock skew doesn't matter
+        job = dict(job, elapsed=round((job.get("finished") or time.time()) - job["started"], 1))
+    return jsonify({"job": job, "calibration": draft.get("calibration"),
                     "margin_range": calibration_mod.MARGIN_RANGE,
                     "defect_band": calibration_mod.DEFECT_BAND, **state})
 

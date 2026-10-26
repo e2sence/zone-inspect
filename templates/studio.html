@@ -146,6 +146,12 @@
                                 checks every defect sample against it. Each good sample is compared with all the others, so the
                                 report shows how many false alarms to expect on good boards. A defect is <b>caught</b> when its
                                 score is above the OK limit. Takes from several seconds to a minute.</p>
+                            <div class="st-calib-run hidden" id="calib-run">
+                                <div class="st-row st-between"><b id="calib-run-pct">0%</b>
+                                    <span class="st-muted" id="calib-run-time"></span></div>
+                                <div class="st-progress st-progress-live"><i id="calib-run-bar" style="width:0%"></i></div>
+                                <span class="st-muted" id="calib-run-msg">Starting…</span>
+                            </div>
                             <p class="st-hint" id="calib-job"></p>
                             <div id="calib-report"></div>
                         </div>
