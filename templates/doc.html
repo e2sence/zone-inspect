@@ -557,10 +557,12 @@
                             <li><strong>7 Publish:</strong> shows what blocks publishing and makes the draft live.</li>
                         </ul>
                         <h4>Samples</h4>
-                        <p><strong>Shoot from above.</strong> Hold the phone roughly parallel to the board, as for the
-                            reference. Tall parts (capacitors, relays) show their sides from an angle, and good photos
-                            taken from different angles look so different that real defects get lost in the
-                            variation. Photos shot more than 12° off the board get a "steep" mark.</p>
+                        <p><strong>Keep the viewpoint consistent.</strong> Tall parts (capacitors, relays) look
+                            different from different angles, and no alignment can undo that. Shoot the samples the way
+                            operators will shoot the boards, all from about the same position and angle. The reference
+                            itself may be shot at an angle; what matters is that photos are similar to the good samples.
+                            Calibration measures, for every zone, how far each photo's viewpoint is from the typical
+                            viewpoint of the good samples, and lists those more than 20° away.</p>
                         <p>Photograph boards the way operators will: hand-held, normal light. Connect a phone with the
                             QR code in step 4/5 (the phone uses the same camera settings as inspection), or upload from
                             a computer. Each photo is aligned to the reference; the card shows which zones are fully in
@@ -584,9 +586,12 @@
                             <em>Middle</em>. The counts update at once; then <strong>Save limits</strong>. By default
                             the limit is the worst good sample × 1.10. Between the OK limit and 1.25 × that limit the
                             result is WARN, above it DEFECT. Subzones follow their zone's limit.</p>
-                        <p>Under each zone the report lists good samples worth a second look: shot at a steep angle,
-                            or scoring far above the other good samples. One such photo raises the limit for the whole
-                            zone; exclude it if it does not show the zone properly, then recalibrate. Changing samples,
+                        <p>Under each zone the report lists samples worth a second look: good samples shot from a
+                            different angle than most good samples or scoring far above them, and defect samples shot
+                            from a different angle (their score mixes the angle and the defect). One unusual good photo
+                            raises the limit for the whole zone; exclude it if it does not show the zone the usual way,
+                            then recalibrate. During inspection, a non-OK verdict on a photo taken from an unusual angle
+                            suggests a retake. Changing samples,
                             zones or the reference makes the calibration out of date: recalibrate before
                             publishing.</p>
                         <h4>Requirements for publishing</h4>
@@ -599,7 +604,7 @@
                         </ul>
                         <p>If some defect samples pass as OK at the chosen limits, the lead can still publish: tick
                             that the misses are accepted and give a reason. The reason is kept with the version and shown
-                            in the version list. Fewer than 3 different good boards and good samples shot at a steep
+                            in the version list. Fewer than 3 different good boards and samples shot from an unusual
                             angle are warnings. A lead publishes on their own once nothing blocks; an admin may publish
                             with unmet requirements.</p>
                         <h4>Changing the reference</h4>
@@ -1213,10 +1218,12 @@ curl -s "$HOST/api/v1/results"
                                 линию.</li>
                         </ul>
                         <h4>Образцы</h4>
-                        <p><strong>Снимайте сверху.</strong> Держите телефон примерно параллельно плате, как при съёмке
-                            эталона. Под углом у высоких деталей (конденсаторы, реле) виден бок, и хорошие снимки с разных
-                            ракурсов так сильно отличаются, что настоящие дефекты теряются в этом разбросе. Снимки,
-                            сделанные под углом больше 12° к плате, получают пометку «steep».</p>
+                        <p><strong>Держите ракурс одинаковым.</strong> Высокие детали (конденсаторы, реле) с разных сторон
+                            выглядят по-разному, и никакое выравнивание этого не исправит. Снимайте образцы так, как
+                            операторы будут снимать платы: примерно с одного места и под одним углом. Эталон сам может быть
+                            снят под углом; важно, чтобы снимки были похожи на хорошие образцы. Калибровка для каждой зоны
+                            измеряет, насколько ракурс снимка отличается от типичного ракурса хороших образцов, и
+                            показывает те, что отличаются больше чем на 20°.</p>
                         <p>Снимайте так же, как будут снимать операторы: с рук, при обычном свете. Подключите телефон
                             по QR-коду на шаге 4/5 (телефон использует те же настройки камеры, что и при инспекции) или
                             загрузите фото с компьютера. Каждое фото выравнивается по эталону; на карточке видно, какие
@@ -1241,9 +1248,12 @@ curl -s "$HOST/api/v1/results"
                             (чуть ниже самого слабого дефекта) или <em>Middle</em> (посередине). Цифры обновляются сразу,
                             затем <strong>Save limits</strong>. По умолчанию порог — худший хороший образец × 1.10.
                             Между порогом OK и 1.25 × порог — WARN, выше — DEFECT. Подзоны следуют порогу своей зоны.</p>
-                        <p>Под каждой зоной отчёт показывает хорошие образцы, на которые стоит взглянуть: снятые под
-                            крутым углом или с оценкой намного выше остальных хороших. Один такой снимок поднимает порог
-                            для всей зоны; исключите его, если зона на нём видна неправильно, и откалибруйте заново.
+                        <p>Под каждой зоной отчёт показывает образцы, на которые стоит взглянуть: хорошие, снятые с
+                            другого ракурса, чем большинство хороших, или с оценкой намного выше остальных, и дефектные,
+                            снятые с другого ракурса (их оценка смешивает ракурс и дефект). Один необычный хороший снимок
+                            поднимает порог для всей зоны; исключите его, если зона на нём видна не так, как обычно, и
+                            откалибруйте заново. При инспекции к вердикту не OK для снимка с необычного ракурса
+                            добавляется совет переснять.
                             Изменение образцов, зон или эталона делает калибровку устаревшей: перед публикацией
                             откалибруйте заново.</p>
                         <h4>Требования для публикации</h4>
@@ -1256,8 +1266,8 @@ curl -s "$HOST/api/v1/results"
                         </ul>
                         <p>Если при выбранных порогах часть дефектных образцов проходит как OK, ведущий всё равно может
                             опубликовать: отметить, что пропуски приняты, и указать причину. Причина сохраняется вместе с
-                            версией и видна в списке версий. Меньше 3 разных исправных плат и хорошие образцы, снятые под
-                            крутым углом, — предупреждения. Ведущий публикует сам, когда ничего не блокирует; админ может
+                            версией и видна в списке версий. Меньше 3 разных исправных плат и образцы, снятые с необычного
+                            ракурса, — предупреждения. Ведущий публикует сам, когда ничего не блокирует; админ может
                             опубликовать и с невыполненными требованиями.</p>
                         <h4>Смена эталона</h4>
                         <p>Образцы привязаны к эталону, по которому выровнены. После замены эталона выровняйте их

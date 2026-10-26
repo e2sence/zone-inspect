@@ -32,8 +32,7 @@ MIN_DEFECT_PER_ZONE = 2
 MIN_DEFECT_PER_CRITICAL_SUBZONE = 1
 MIN_DEVICES = 2               # among GOOD samples: phone-to-phone variation is normal
 MIN_BOARDS = 3
-MIN_FEATURE_PX = 48
-MAX_VIEW_ANGLE = 12.0      # degrees off the board normal; steeper samples are flagged           # zone/subzone short side in a sample photo
+MIN_FEATURE_PX = 48           # zone/subzone short side in a sample photo
 
 DEFECT_TYPES = ("missing", "wrong_part", "shifted", "rotated",
                 "contamination", "damage", "other")
@@ -217,27 +216,6 @@ def photo_scale(H) -> float:
     return float(np.sqrt(abs(np.linalg.det(A[:2, :2] / A[2, 2]))))
 
 
-def view_angle(H, photo_wh, ref_wh) -> float | None:
-    """Angle in degrees between the phone's axis and the board normal, from
-    the homography photo → reference (the reference is shot from above).
-    Tall parts look different from steep angles, so samples and inspection
-    photos should be shot roughly parallel to the board. Approximate phone
-    camera: focal length 0.72 × the long side (≈26 mm equivalent)."""
-    def K(wh):
-        f = 0.72 * max(wh)
-        return np.array([[f, 0, wh[0] / 2], [0, f, wh[1] / 2], [0, 0, 1]], np.float64)
-    try:
-        M = np.linalg.inv(K(photo_wh)) @ np.linalg.inv(np.asarray(H, np.float64)) @ K(ref_wh)
-    except np.linalg.LinAlgError:
-        return None
-    lam = 2.0 / (np.linalg.norm(M[:, 0]) + np.linalg.norm(M[:, 1]))
-    normal = np.cross(M[:, 0] * lam, M[:, 1] * lam)
-    n = np.linalg.norm(normal)
-    if not n:
-        return None
-    return round(float(np.degrees(np.arccos(min(1.0, abs(normal[2]) / n)))), 1)
-
-
 def locate_box(box: dict, zones: list[dict]):
     """(zone, subzone) whose rectangle contains the centre of a defect box
     given in normalized reference coordinates; None where nothing matches.
@@ -273,9 +251,6 @@ def derive_sample(sample: dict, version: dict) -> dict:
                            version.get("ref_size") or (1, 1), zones))
     out["visible_zones"] = [i for i, v in enumerate(vis) if v]
     out["zones"] = {str(i): "ok" for i in out["visible_zones"]}
-    out["view_angle"] = (view_angle(align["H"], (sample["width"], sample["height"]),
-                                    version.get("ref_size") or (sample["width"], sample["height"]))
-                         if out["aligned"] else None)
     defects = []
     for d in sample.get("defects", []):
         zi, si = locate_box(d["box"], zones) if d.get("box") else (None, None)
@@ -335,8 +310,6 @@ def sample_summary(version: dict, samples: list[dict]) -> dict:
             "unaligned": sum(1 for s in samples if not s.get("stale")
                              and not s.get("aligned") and not s.get("excluded")),
             "good_total": sum(1 for s in active if s["kind"] == "good"),
-            "steep_good": sum(1 for s in active if s["kind"] == "good"
-                              and (s.get("view_angle") or 0) > MAX_VIEW_ANGLE),
             "defect_total": sum(1 for s in active if s["kind"] == "defect")}
 
 
@@ -382,7 +355,7 @@ def publish_check(version: dict, summary: dict, calib_state: dict | None = None)
             warnings.append(f"{what} is about {sm['px_in_photos']} px in the photos; shoot closer or make it larger ({MIN_FEATURE_PX}+ px)")
     if len(summary["boards"]) < MIN_BOARDS:
         warnings.append(f"Good samples from {len(summary['boards'])} board(s); {MIN_BOARDS}+ recommended")
-    if summary.get("steep_good"):
-        warnings.append(f"{summary['steep_good']} good sample(s) shot at more than {MAX_VIEW_ANGLE:.0f}° to the board; "
-                        "they widen the normal variation — exclude them or reshoot from above")
+    if calib_state and calib_state.get("view_outliers"):
+        warnings.append(f"{calib_state['view_outliers']} sample(s) shot from a different angle than most good samples "
+                        "(step 6): exclude them or reshoot them the usual way")
     return {"ok": not blockers, "blockers": blockers, "warnings": warnings, "needs_ack": needs_ack}

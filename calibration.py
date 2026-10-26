@@ -32,7 +32,6 @@ import torch
 import torch.nn.functional as F
 
 import nn_engine as nn
-from recipes import MAX_VIEW_ANGLE
 
 MODEL = "patch-v1"
 IN_H = 480                 # zone crops are resized to this height (aspect kept)
@@ -44,6 +43,59 @@ MARGIN_DEFAULT = 1.10
 MARGIN_RANGE = (0.50, 2.50)   # OK limit ÷ worst good score, per zone
 DEFECT_BAND = 1.25         # DEFECT above t_ok × DEFECT_BAND
 MIN_GOOD_TO_CALIBRATE = 5
+VIEW_DEVIATION_MAX = 20.0  # degrees from the typical viewpoint of the good samples
+
+
+# ─── Viewpoint ───────────────────────────────────────────────────────────────
+# Tall parts (capacitors, relays) look different from different viewpoints,
+# and a 2-D homography cannot undo that. What matters is not the angle to the
+# board or to the reference (which may itself be shot at an angle) but that
+# photos are taken from about the same viewpoint as the good samples the
+# model learned from. The viewpoint of a photo at a zone is the direction
+# from the zone centre to the camera, in the reference camera's frame,
+# recovered from the plane homography (approximate phone camera: focal
+# length 0.72 × the long side, ≈26 mm equivalent).
+
+def _K(wh):
+    f = 0.72 * max(wh)
+    return np.array([[f, 0, wh[0] / 2], [0, f, wh[1] / 2], [0, 0, 1]], np.float64)
+
+
+def _angle(a, b, signed=True):
+    c = float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+    return float(np.degrees(np.arccos(np.clip(c if signed else abs(c), -1, 1))))
+
+
+def view_poses(H, photo_wh, ref_wh):
+    """Camera poses of a photo relative to the reference camera that explain
+    the homography photo → reference: [(R, t, n)], n = board normal facing the
+    reference camera, t in units of the board distance. Usually two."""
+    try:
+        Hn = np.linalg.inv(_K(photo_wh)) @ np.linalg.inv(np.asarray(H, np.float64)) @ _K(ref_wh)
+    except np.linalg.LinAlgError:
+        return []
+    _, Rs, Ts, Ns = cv2.decomposeHomographyMat(Hn, np.eye(3))
+    return [(R, t.ravel(), n.ravel() / np.linalg.norm(n)) for R, t, n in zip(Rs, Ts, Ns) if n[2, 0] > 0]
+
+
+def board_normal(poses_per_photo):
+    """The board normal shared by all photos (each photo alone is ambiguous)."""
+    poses_per_photo = [p for p in poses_per_photo if p]
+    normals = [n for poses in poses_per_photo for _, _, n in poses]
+    if not normals:
+        return None
+    cost = lambda m: sum(min(min(_angle(m, n, False) for _, _, n in poses), 20.0) for poses in poses_per_photo)
+    return min(normals, key=cost)
+
+
+def view_direction(poses, normal, ref_wh, point):
+    """Unit vector from a board point (reference pixels) to the camera."""
+    if not poses or normal is None:
+        return None
+    R, t, _ = min(poses, key=lambda p: _angle(p[2], normal, False))
+    a = np.linalg.inv(_K(ref_wh)) @ np.array([point[0], point[1], 1.0])
+    d = -R.T @ t - a / float(normal @ a)
+    return d / np.linalg.norm(d)
 
 
 # ─── Geometry ────────────────────────────────────────────────────────────────
@@ -234,6 +286,14 @@ def calibrate(version: dict, samples: list, load_photo, progress=lambda msg, fra
         return photos[s["id"]]
 
     usable = [s for s in samples if not s.get("excluded") and s.get("aligned")]
+    def photo_wh(s):
+        if s.get("width") and s.get("height"):
+            return s["width"], s["height"]
+        h, w = photo(s).shape[:2]
+        return w, h
+
+    poses = {s["id"]: view_poses(s["align"]["H"], photo_wh(s), ref_wh) for s in usable}
+    normal = board_normal([poses[s["id"]] for s in usable if s["kind"] == "good"])
 
     def report(zi, stage, i, n, msg):
         start = 0.0
@@ -273,6 +333,15 @@ def calibrate(version: dict, samples: list, load_photo, progress=lambda msg, fra
             report(zi, "loo", i, len(FG), f"{label}: comparing good sample {i + 1} of {len(FG)} with the others")
             loo.append(anomaly_map(f, FG[:i] + FG[i + 1:]))
         norm = normaliser(loo)
+        centre = (geom.x + geom.w / 2, geom.y + geom.h / 2)
+        dirs = {s["id"]: view_direction(poses[s["id"]], normal, ref_wh, centre) for s, _, _ in goods + defects}
+        gd = [dirs[s["id"]] for s, _, _ in goods if dirs[s["id"]] is not None]
+        typical = None
+        if gd:
+            typical = np.mean(gd, 0)
+            typical /= np.linalg.norm(typical)
+        dev = {sid: (round(_angle(d, typical), 1) if d is not None and typical is not None else None)
+               for sid, d in dirs.items()}
         good_scores, good_sub = [], []
         for i, (raw, (s, img, cov)) in enumerate(zip(loo, goods)):
             # normaliser without the held-out sample, as at inspection time
@@ -296,7 +365,7 @@ def calibrate(version: dict, samples: list, load_photo, progress=lambda msg, fra
                 bx, by = (b["x"] - zone["x"]) / zone["w"], (b["y"] - zone["y"]) / zone["h"]
                 bw, bh = b["w"] / zone["w"], b["h"] / zone["h"]
                 in_box |= (bx - .05 <= px <= bx + bw + .05) and (by - .05 <= py <= by + bh + .05)
-            drows.append({"sample_id": s["id"], "score": round(zsc, 4),
+            drows.append({"sample_id": s["id"], "score": round(zsc, 4), "view_dev": dev[s["id"]],
                           "sub_scores": [round(x, 4) for x in subs],
                           "subzone": sub_j, "in_box": bool(in_box)})
         calib["zones"].append({
@@ -304,7 +373,11 @@ def calibrate(version: dict, samples: list, load_photo, progress=lambda msg, fra
             "in_w": geom.in_w, "in_h": geom.in_h,
             "n_good": len(goods), "good_scores": good_scores,
             "good_ids": [s["id"] for s, _, _ in goods],
-            "suspects": _suspects([s for s, _, _ in goods], good_scores),
+            "good_view_dev": [dev[s["id"]] for s, _, _ in goods],
+            "view": ({"typical": [round(float(x), 5) for x in typical],
+                      "normal": [round(float(x), 5) for x in normal]} if typical is not None else None),
+            "suspects": _suspects([s for s, _, _ in goods], good_scores, dev,
+                                  [(s, r["score"]) for (s, _, _), r in zip(defects, drows)]),
             "defects": drows,
             "subzones": [{"label": sz.get("label", f"S{j + 1}"), "critical": bool(sz.get("critical")),
                           "good_scores": [g[j] for g in good_sub]}
@@ -316,26 +389,34 @@ def calibrate(version: dict, samples: list, load_photo, progress=lambda msg, fra
     return apply_margin(calib, margin, zone_margins), blobs
 
 
-def _suspects(goods: list, good_scores: list) -> list:
-    """Good samples worth a second look: shot at a steep angle (tall parts
-    look different) or scoring far above the other good samples (the zone may
-    be cut out wrongly, blurred or the board may actually have a defect).
-    One such sample raises the OK limit for the whole zone."""
+def _suspects(goods: list, good_scores: list, view_dev: dict, defects: list = ()) -> list:
+    """Samples worth a second look. Good samples: shot from a different
+    viewpoint than most good samples, or scoring far above them (the zone may
+    be cut out wrongly, blurred, or the board may have a defect); one such
+    sample raises the OK limit for the whole zone. Defect samples shot from a
+    different viewpoint: their score mixes the viewpoint and the defect."""
     sc = np.asarray(good_scores, np.float64)
     med = float(np.median(sc)) if sc.size else 0.0
     mad = float(np.median(np.abs(sc - med))) * 1.4826 if sc.size else 0.0
+    off = lambda sid: view_dev.get(sid) is not None and view_dev[sid] > VIEW_DEVIATION_MAX
     out = []
     for s, score in zip(goods, good_scores):
         reasons = []
-        angle = s.get("view_angle")
-        if angle is not None and angle > MAX_VIEW_ANGLE:
-            reasons.append(f"shot at {angle:.0f}° (limit {MAX_VIEW_ANGLE:.0f}°): hold the phone parallel to the board")
+        # a different angle matters only when it actually raises the score
+        if off(s["id"]) and score > med:
+            reasons.append(f"shot from a different angle than most good samples ({view_dev[s['id']]:.0f}° away)")
         if mad > 0 and score > med + 4 * mad:
             reasons.append(f"score {score:.2f} is far above the other good samples (typical {med:.2f})")
         if reasons:
-            out.append({"sample_id": s["id"], "score": score, "view_angle": angle,
+            out.append({"sample_id": s["id"], "kind": "good", "score": score, "view_dev": view_dev.get(s["id"]),
                         "device": s.get("device"), "reasons": reasons})
-    return sorted(out, key=lambda x: -x["score"])
+    for s, score in defects:
+        if off(s["id"]):
+            out.append({"sample_id": s["id"], "kind": "defect", "score": score, "view_dev": view_dev[s["id"]],
+                        "device": s.get("device"),
+                        "reasons": [f"shot from a different angle than the good samples ({view_dev[s['id']]:.0f}° away): "
+                                    "its score mixes the angle and the defect"]})
+    return sorted(out, key=lambda x: (x["kind"] != "good", -x["score"]))
 
 
 # ─── Inspection with a calibrated zone ───────────────────────────────────────
@@ -343,6 +424,7 @@ def _suspects(goods: list, good_scores: list) -> list:
 class ZoneModel:
     def __init__(self, zone: dict, ref_wh, zcal: dict, npz_bytes: bytes):
         self.geom = ZoneGeom(zone, ref_wh)
+        self.ref_wh = ref_wh
         data = np.load(io.BytesIO(npz_bytes))
         self.bank = [torch.from_numpy(b.astype(np.float32)) for b in data["bank"]]
         self.norm = data["norm"].astype(np.float32)
@@ -359,11 +441,18 @@ class ZoneModel:
         zsc, subs, m = scores(m_raw, self.norm, self.geom.valid_mask(cov), self.geom)
         t_ok, t_def = self.cal["t_ok"], self.cal["t_def"]
         sub_out = []
+        view = self.cal.get("view")
+        view_dev = None
+        if view:
+            d = view_direction(view_poses(H, (photo.shape[1], photo.shape[0]), self.ref_wh),
+                               np.asarray(view["normal"]), self.ref_wh,
+                               (self.geom.x + self.geom.w / 2, self.geom.y + self.geom.h / 2))
+            view_dev = round(_angle(d, np.asarray(view["typical"])), 1) if d is not None else None
         for j, sz in enumerate(self.cal["subzones"]):
             sub_out.append({"index": j, "label": sz["label"], "critical": sz["critical"],
                             "score": round(subs[j], 3), "t_ok": sz["t_ok"], "t_def": sz["t_def"],
                             "status": status_of(subs[j], sz["t_ok"], sz["t_def"])})
         return {"status": status_of(zsc, t_ok, t_def), "score": round(zsc, 3),
                 "t_ok": t_ok, "t_def": t_def, "coverage": round(share, 3),
-                "map": m, "crop": crop, "subzones": sub_out,
+                "map": m, "crop": crop, "subzones": sub_out, "view_dev": view_dev,
                 "area_pct": round(100.0 * float((m > t_ok).mean()), 2)}

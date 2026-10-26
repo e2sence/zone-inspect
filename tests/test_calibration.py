@@ -96,14 +96,53 @@ def test_zone_limit_and_missed_detail(setup):
     assert "margin" not in C.apply_margin(cal, 1.1)["zones"][0]
 
 
-def test_suspect_good_samples():
+def _camera(C, target, wh):
+    """Pinhole looking from C at target: (K, R, t) with x ~ K (R X + t)."""
+    import calibration as Cm
+    z = (target - C) / np.linalg.norm(target - C)
+    x = np.cross([0, 1.0, 0], z); x /= np.linalg.norm(x)
+    R = np.stack([x, np.cross(z, x), z])
+    return Cm._K(wh), R, -R @ C
+
+
+def _homography(cam_from, cam_to):
+    """Homography between two views of the board plane Z = 0."""
+    pts = np.array([[x, y, 0.0] for x in (-0.1, 0.1) for y in (-0.1, 0.1)])
+    proj = lambda cam: np.array([(lambda p: p[:2] / p[2])(cam[0] @ (cam[1] @ X + cam[2])) for X in pts])
+    H, _ = cv2.findHomography(proj(cam_from).astype(np.float32), proj(cam_to).astype(np.float32))
+    return H
+
+
+def test_view_deviation_with_angled_reference():
+    """The reference is shot at 30°; deviation is measured between photos,
+    whatever the reference angle."""
+    import calibration as Cm
+    ref_wh, ph_wh = (3024, 4032), (3000, 4000)
+    origin = np.zeros(3)
+    ref = _camera(np.array([0.0, -0.25, 0.43]), origin, ref_wh)       # ~30° off the board normal
+    centres = [np.array([0.05, 0.0, 0.4]), np.array([-0.03, 0.04, 0.38]), np.array([0.25, 0.0, 0.3])]
+    photos = [_camera(c, origin, ph_wh) for c in centres]
+    poses = [Cm.view_poses(_homography(p, ref), ph_wh, ref_wh) for p in photos]
+    normal = Cm.board_normal(poses)
+    point = (lambda p: p[:2] / p[2])(ref[0] @ (ref[1] @ origin + ref[2]))     # board origin in the reference
+    dirs = [Cm.view_direction(p, normal, ref_wh, point) for p in poses]
+    for i, j in ((0, 1), (0, 2), (1, 2)):
+        truth = Cm._angle(centres[i], centres[j])
+        assert abs(Cm._angle(dirs[i], dirs[j]) - truth) < 1.0, (i, j, truth)
+
+
+def test_suspect_samples():
     import calibration as C
-    goods = [{"id": str(i), "view_angle": 3.0} for i in range(10)]
-    goods[3]["view_angle"] = 30.0
+    goods = [{"id": str(i)} for i in range(10)]
     scores = [1.0, 1.05, 0.95, 1.1, 1.02, 0.98, 1.01, 1.04, 0.97, 2.4]
-    sus = {s["sample_id"]: s["reasons"] for s in C._suspects(goods, scores)}
-    assert set(sus) == {"3", "9"}
-    assert "30°" in sus["3"][0] and "far above" in sus["9"][0]
+    dev = {str(i): 5.0 for i in range(10)}
+    dev["3"] = dev["2"] = 30.0             # "2" scores below typical: its angle does no harm
+    dev["d1"], dev["d2"] = 35.0, 4.0
+    sus = C._suspects(goods, scores, dev, [({"id": "d1"}, 2.0), ({"id": "d2"}, 2.5)])
+    by_id = {s["sample_id"]: s for s in sus}
+    assert set(by_id) == {"3", "9", "d1"}
+    assert "30° away" in by_id["3"]["reasons"][0] and "far above" in by_id["9"]["reasons"][0]
+    assert by_id["d1"]["kind"] == "defect" and sus[-1]["sample_id"] == "d1"
 
 
 def test_zone_model_inspects_new_photos(setup):

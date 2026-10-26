@@ -51,17 +51,6 @@ class TestModel:
         assert R.locate_box({"x": .40, "y": .50, "w": .01, "h": .01}, zones) == (0, None)
         assert R.locate_box({"x": .01, "y": .01, "w": .01, "h": .01}, zones) == (None, None)
 
-    def test_view_angle_from_homography(self):
-        def K(w, h):
-            f = 0.72 * max(w, h)
-            return np.array([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1]])
-        for deg in (0, 10, 25):
-            t = np.radians(deg)
-            Rx = np.array([[1, 0, 0], [0, np.cos(t), -np.sin(t)], [0, np.sin(t), np.cos(t)]])
-            H_ref_to_photo = K(3000, 4000) @ Rx @ np.linalg.inv(K(3024, 4032))
-            angle = R.view_angle(np.linalg.inv(H_ref_to_photo), (3000, 4000), (3024, 4032))
-            assert abs(angle - deg) < 0.5, (deg, angle)
-
     def test_publish_check_lists_what_is_missing(self):
         v = {"ref_image": "v1/ref.jpg", "ref_quality": {"level": "ok"},
              "zones": [ZONE]}

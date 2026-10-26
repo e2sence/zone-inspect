@@ -1232,10 +1232,9 @@ def _check_zone_calibrated(s: dict, photo, from_mobile: bool, photo_path):
         verdict = {"ok": "OK ✅ — within the normal variation of the good samples",
                    "warn": "Warning ⚠️ — unusual area, check it",
                    "defect": "Defect ❌ — outside the normal variation"}[res["status"]]
-        angle = recipes_mod.view_angle(H, (photo.shape[1], photo.shape[0]),
-                                       (ref_img.shape[1], ref_img.shape[0]))
-        steep = angle is not None and angle > recipes_mod.MAX_VIEW_ANGLE
-        result["view_angle"] = angle
+        view_dev = res.get("view_dev")
+        off_angle = view_dev is not None and view_dev > calibration_mod.VIEW_DEVIATION_MAX
+        result["view_dev"] = view_dev
         vis_def, vis_heat, n_regions = _vis_calibrated(res["crop"], res["map"], res["t_ok"], res["t_def"])
         sub_results = []
         gh, gw = res["map"].shape
@@ -1263,8 +1262,9 @@ def _check_zone_calibrated(s: dict, photo, from_mobile: bool, photo_path):
             if rank[sr["status"]] > rank[status]:
                 status = sr["status"]
                 verdict = f"{verdict} (subzone: {sr['label']})"
-        if steep and status != "ok":
-            verdict += f" · photo taken at {angle:.0f}° — retake holding the phone parallel to the board"
+        if off_angle and status != "ok":
+            verdict += (f" · photo taken from an unusual angle ({view_dev:.0f}° from the recipe's samples)"
+                        " — retake it the usual way")
         from datetime import datetime as _dt, timezone as _tz, timedelta as _td
         s["checked"][best] = {
             "score": result["best_score"], "photo_b64": photo_b64,
@@ -2355,6 +2355,9 @@ def _calib_state(draft: dict, samples: list) -> dict:
     return {"present": True,
             "fresh": cal.get("fingerprint") == calibration_mod.fingerprint(draft, samples),
             "missed": cal.get("missed", 0), "missed_detail": cal.get("missed_detail", []),
+            "view_outliers": len({sp["sample_id"] for z in cal.get("zones", [])
+                                  for sp in z.get("suspects", []) if (sp.get("view_dev") or 0)
+                                  > calibration_mod.VIEW_DEVIATION_MAX}),
             "skipped": cal.get("skipped", []),
             "margin": cal.get("margin"), "created_at": cal.get("created_at")}
 

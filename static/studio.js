@@ -434,16 +434,12 @@
         return hit ? hit[1] : 'quality';
     }
 
-    const VIEW_ANGLE_LIMIT = 12;   // recipes.MAX_VIEW_ANGLE
-
     function sampleCard(x) {
         const q = x.quality || {};
         const chips = [];
         if (x.stale) chips.push('<span class="chip warn">old reference</span>');
         else if (!x.aligned) chips.push('<span class="chip bad">not aligned</span>');
         else chips.push(`<span class="chip ok">${x.visible_zones.length ? x.visible_zones.map(i => esc(zoneLabel(i))).join(', ') : 'no full zone'}</span>`);
-        if (x.view_angle > VIEW_ANGLE_LIMIT)
-            chips.push(`<span class="chip warn" title="Shot at ${x.view_angle}° to the board; tall parts look different from the side. Hold the phone parallel to the board.">steep ${Math.round(x.view_angle)}°</span>`);
         if (q.level === 'bad' || q.level === 'warn')
             chips.push(`<span class="chip ${q.level}" title="${esc((q.issues || []).join('; '))}">${qualityLabel(q)}</span>`);
         if (x.kind === 'defect') {
@@ -658,8 +654,8 @@
         const s = samples.find(x => x.id === sp.sample_id);
         const excluded = s && s.excluded;
         return `<li class="cal-suspect">
-            <img src="/api/samples/${esc(sp.sample_id)}/image?size=thumb" alt="Good sample photo" loading="lazy">
-            <div><b>good sample · ${esc(sp.device || 'phone not named')} · score ${sp.score.toFixed(2)}</b>
+            <img src="/api/samples/${esc(sp.sample_id)}/image?size=thumb" alt="Sample photo" loading="lazy">
+            <div><b>${sp.kind === 'defect' ? 'defect' : 'good'} sample · ${esc(sp.device || 'phone not named')} · score ${sp.score.toFixed(2)}</b>
                 ${sp.reasons.map(r => `<div class="st-muted">${esc(r)}</div>`).join('')}</div>
             ${excluded ? '<span class="chip">excluded — recalibrate</span>'
                 : `<button class="btn btn-sm btn-outline" data-exclude="${esc(sp.sample_id)}">Exclude</button>`}</li>`;
@@ -699,10 +695,10 @@
                 <span class="st-muted">WARN up to ${z.t_def.toFixed(2)}, DEFECT above</span>
             </div>
             ${ds.length && Math.min(...ds) <= worstOf(z.good_scores) ? `<p class="st-hint">Good and defect samples overlap: no limit gives
-                both zero false alarms and every defect caught. Check the good samples listed below, or add good photos shot from above.</p>` : ''}
+                both zero false alarms and every defect caught. Check the samples listed below, or add good photos shot the way operators will shoot.</p>` : ''}
             ${subRows ? `<div class="st-table-wrap"><table class="data-table st-table"><thead><tr>
                 <th>Subzone</th><th>Scores</th><th>OK limit</th><th>False alarms</th><th>Caught</th></tr></thead><tbody>${subRows}</tbody></table></div>` : ''}
-            ${suspects.length ? `<p class="st-muted" style="margin-top:8px">Good samples worth a second look — one unusual good sample raises the limit for the whole zone:</p>
+            ${suspects.length ? `<p class="st-muted" style="margin-top:8px">Samples worth a second look — one unusual good sample raises the limit for the whole zone:</p>
                 <ul class="cal-suspects">${suspects.map(suspectRow).join('')}</ul>` : ''}
         </div>`;
     }
