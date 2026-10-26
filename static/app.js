@@ -1998,7 +1998,8 @@
                 <span class="tpl-meta">Zones: ${t.zone_count}</span>
                 <div class="tpl-actions">
                     <button class="tpl-btn load" data-id="${esc(t.id)}">Load</button>
-                    ${canAuthor ? `<a class="tpl-btn edit" href="/studio#${esc(t.id)}" style="text-decoration:none">Studio</a>` : ''}
+                    ${canAuthor && (window.AUTH_ROLE === 'admin' || (t.group || '') === window.AUTH_GROUP) ? `<a class="tpl-btn edit" href="/studio#${esc(t.id)}" style="text-decoration:none">Studio</a>` : ''}
+                    ${!t.group ? '<span style="color:var(--muted);font-size:11px">shared</span>' : ''}
                 </div>`;
                     el.appendChild(card);
                 });

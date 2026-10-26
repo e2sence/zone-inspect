@@ -2036,10 +2036,12 @@ def _studio_guard():
 
 @app.route("/api/templates", methods=["GET"])
 def list_templates():
-    """Recipes available for inspection: those with an active version."""
+    """Recipes available for inspection: those with an active version.
+    A recipe without a group is shared: every group may inspect with it
+    (editing it in Studio stays with admins)."""
     if not MONGO_AVAILABLE:
         return jsonify({"error": "MongoDB unavailable"}), 503
-    q = _group_filter()
+    q = _group_filter(shared=True)
     docs = _templates_col.find(q, {"_id": 0, "id": 1, "name": 1, "zones": 1,
                                    "created": 1, "barcode_mask": 1, "version": 1,
                                    "group": 1, "active_version": 1,
@@ -2067,7 +2069,7 @@ def load_template(tid):
     if not MONGO_AVAILABLE:
         return jsonify({"error": "MongoDB unavailable"}), 503
     q = {"id": tid}
-    q.update(_group_filter())
+    q.update(_group_filter(shared=True))
     meta = _templates_col.find_one(q, {"_id": 0})
     if not meta or not meta.get("zones"):
         return jsonify({"error": "Template not found"}), 404

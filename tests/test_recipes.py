@@ -272,3 +272,24 @@ class TestPhoneSampleCapture:
             assert r["summary"]["zones"][0]["good"] == 1
             # an inspection token endpoint must not accept a sample token
             assert phone.get(f"/api/mobile/{token}/info").status_code == 404
+
+
+@pytest.mark.mongo
+class TestSharedRecipes:
+    def test_recipe_without_group_is_usable_by_every_group(
+            self, mongo, flask_app, authed_client):
+        import app as app_module
+        app_module._templates_col.insert_one({
+            "id": "shared01", "name": "Shared", "version": 1, "zones": [ZONE],
+            "ref_image": "ref.jpg"})            # legacy: no group field at all
+        from tests.conftest import FAKE_R2
+        FAKE_R2["templates/shared01/ref.jpg"] = cv2.imencode(".jpg", make_board())[1].tobytes()
+        with flask_app.test_client() as op:
+            op.set_cookie("pcb_auth_key", "test-operator-key-2222")   # line1
+            ids = [t["id"] for t in op.get("/api/templates").get_json()["templates"]]
+            assert "shared01" in ids
+            assert op.get("/api/templates/shared01").status_code == 200
+        with flask_app.test_client() as lead:
+            lead.set_cookie("pcb_auth_key", "test-lead-key-1111")      # line1
+            # editing a shared recipe is for admins
+            assert lead.get("/api/recipes/shared01").status_code == 404

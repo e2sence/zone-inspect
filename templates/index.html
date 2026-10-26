@@ -426,7 +426,7 @@
     <script src="/static/app.js?v={{ v }}"></script>
 
 
-    <script>window.AUTH_ROLE = {{ auth_role|tojson }};</script>
+    <script>window.AUTH_ROLE = {{ auth_role|tojson }}; window.AUTH_GROUP = {{ (auth_group or "")|tojson }};</script>
 </body>
 
 </html>

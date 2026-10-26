@@ -484,119 +484,133 @@
                         <p>Open the application URL. Enter your access key on the login page. The key is provided by the
                             administrator and maps to your operator name. The session persists for 30 days.</p>
                         <h4>Interface Overview</h4>
-                        <p>The system uses a 3-step wizard:</p>
+                        <p>Operators work on the inspection screen:</p>
                         <ul>
-                            <li><strong>Step 1 — Upload:</strong> upload a reference photo or load a saved
-                                template.</li>
-                            <li><strong>Step 2 — Zones:</strong> draw inspection zones on the reference image.</li>
-                            <li><strong>Step 3 — Check:</strong> take zone photos, run analysis, review results.</li>
+                            <li><strong>Step 1 — Recipe:</strong> choose a published recipe (name, version, barcode
+                                mask).</li>
+                            <li><strong>Step 3 — Check:</strong> scan the serial number, take zone photos, review
+                                results and save.</li>
                         </ul>
+                        <p>Leads and admins also have <strong>Recipe Studio</strong> (link in the header) to prepare
+                            recipes, and a quick check without a recipe (Step 2 — Zones) for trials.</p>
                         <p>Click the <strong>Step 1</strong> indicator at any time to reset and start over.</p>
-                        <h4>Sensitivity Controls</h4>
-                        <p>In the header, two inputs control detection strictness:</p>
-                        <ul>
-                            <li><strong>Zone</strong> (0.00–2.00) — sensitivity for zone-level defect detection.
-                                Default: 0.50.</li>
-                            <li><strong>Subzone</strong> (0.00–2.00) — sensitivity for subzone-level analysis. Default:
-                                0.51.</li>
-                        </ul>
-                        <p>Higher values = stricter detection (more defects flagged). Lower values = more lenient.</p>
+                        <h4>Strictness</h4>
+                        <p>How strict the check is belongs to the recipe (zone and subzone values 0.00–2.00, defaults
+                            0.50 / 0.51; higher = stricter). Operators cannot change it. Leads and admins can tick
+                            <strong>Override</strong> in the header for a trial run; without the tick the recipe's
+                            values are used.</p>
                     </div>
                 </div>
 
-                <!-- 2. Uploading Reference -->
+                <!-- 2. Reference Image -->
                 <div class="section" data-search>
                     <div class="section-hdr" onclick="toggleSection(this)">
                         <span class="section-num">2</span>
-                        <span class="section-title">Uploading a Reference Image</span>
+                        <span class="section-title">Reference Image</span>
                         <span class="section-arrow">&#9654;</span>
                     </div>
                     <div class="section-body">
-                        <h4>Single Image</h4>
-                        <p>Drag and drop (or click to browse) a single photo of the reference assembly into the upload
-                            area.
-                            Supported formats: PNG, JPG, JPEG, BMP, WebP.</p>
-                        <h4>Multi-Image Blending</h4>
-                        <p>Upload 2+ photos of the same object. The system shows a blending panel:</p>
-                        <ul>
-                            <li><strong>Manual blend:</strong> adjust X/Y offset and Scale sliders for each image. Click
-                                "Blend (manual)" to merge.</li>
-                            <li><strong>Auto-align (SIFT):</strong> automatically aligns images using feature matching,
-                                then averages. Best for slightly shifted shots.</li>
-                            <li><strong>Readjust:</strong> go back to the slider interface after viewing the result.
-                            </li>
-                        </ul>
-                        <p>Multi-image blending reduces noise and produces a cleaner reference.</p>
+                        <p>The reference image belongs to a recipe and is set in <strong>Recipe Studio</strong>, step 2
+                            (see section 3). Each recipe version keeps its own reference.</p>
+                        <h4>Quality check</h4>
+                        <p>Every reference is checked for sharpness, exposure and resolution. A red result blocks
+                            publishing; yellow is a warning. Use a sharp, evenly lit photo of a known-good board, taken
+                            the way operators will shoot.</p>
+                        <h4>Blending several photos</h4>
+                        <p>"Blend several photos…" aligns 2+ shots of the same board (SIFT, with barcode/QR anchors as a
+                            fallback) and averages them. This reduces noise and glare.</p>
+                        <h4>Quick check without a recipe (lead / admin)</h4>
+                        <p>The inspection screen still has an upload area for trials: upload a reference, draw zones,
+                            check. Such results have no recipe version. Operators do not see this area.</p>
                     </div>
                 </div>
 
-                <!-- 3. Templates -->
-                <div class="section" data-search>
+                <!-- 3. Recipes & Recipe Studio -->
+                <div class="section" data-search id="studio">
                     <div class="section-hdr" onclick="toggleSection(this)">
                         <span class="section-num">3</span>
-                        <span class="section-title">Templates</span>
+                        <span class="section-title">Recipes &amp; Recipe Studio</span>
                         <span class="section-arrow">&#9654;</span>
                     </div>
                     <div class="section-body">
-                        <h4>Saved Templates</h4>
-                        <p>Templates store the reference image + zone layout for reuse. They appear as cards in Step 1
-                            with name, barcode mask, version number, zone count, and creation date.</p>
-                        <h4>Load</h4>
-                        <p>Click "Load" on a template card to jump directly to Step 3 (inspection) with all zones
-                            pre-configured. A "Recipe" badge appears showing the template name.</p>
-                        <h4>Save as Template</h4>
-                        <p>In Step 2 after drawing zones, enter a name and optional barcode mask, then click "Save
-                            Template". The reference image is stored in cloud storage (R2).</p>
-                        <h4>Edit Template</h4>
-                        <p>Click "Edit" on a template card to open the full-screen template editor. You can:</p>
+                        <p>A <span class="kw">recipe</span> is everything needed to inspect one product: reference
+                            image, zones and subzones, strictness, notes for operators, and samples of good and defective
+                            boards. Recipes are prepared in <strong>Recipe Studio</strong> (<code>/studio</code>,
+                            lead and admin) and used on the inspection screen.</p>
+                        <h4>Versions</h4>
+                        <p>Each recipe has versions: <span class="kw">draft</span> → <span class="kw">live</span> →
+                            <span class="kw">archived</span>. Operators always inspect with the live version. Editing
+                            a live recipe opens a new draft; the line keeps the live version until the draft is
+                            published. Any archived version can be put back on the line from the version list. Every
+                            inspection result stores the recipe version it was checked with.</p>
+                        <h4>Studio steps</h4>
                         <ul>
-                            <li>Add, rename, delete, and reorder zones (drag the handle).</li>
-                            <li>Draw anchor points and subzones (see below).</li>
-                            <li>Change template name and barcode mask.</li>
-                            <li>Zoom the canvas: <span class="kbd">Ctrl</span>+scroll or +/- buttons (100%–800%).</li>
+                            <li><strong>1 Details:</strong> name, barcode mask, shooting plan (zone by zone or whole
+                                board), notes for operators, strictness.</li>
+                            <li><strong>2 Reference:</strong> see section 2.</li>
+                            <li><strong>3 Zones:</strong> see section 4.</li>
+                            <li><strong>4 Good samples:</strong> photos of known-good boards.</li>
+                            <li><strong>5 Defect samples:</strong> photos of boards with known defects, each labelled
+                                with a box.</li>
+                            <li><strong>6 Calibrate:</strong> arrives in a later release; samples collected now will be
+                                used then.</li>
+                            <li><strong>7 Publish:</strong> shows what blocks publishing and makes the draft live.</li>
                         </ul>
-                        <h4>Versioning</h4>
-                        <p>Click "Save changes" to create a new version. Previous versions are archived and visible in
-                            the sidebar. Click any older version to restore it (creates a new version).</p>
-                        <h4>Delete Template</h4>
-                        <p>Click "Delete" on the template card. Confirmation required.</p>
-                        <h4>Barcode Mask</h4>
-                        <p>A prefix string (e.g. "7334") that validates scanned serial numbers. If the scanned code does
-                            not start with this mask, a "Mask mismatch" warning appears during inspection.</p>
+                        <h4>Samples</h4>
+                        <p>Photograph boards the way operators will: hand-held, normal light. Connect a phone with the
+                            QR code in step 4/5 (the phone uses the same camera settings as inspection), or upload from
+                            a computer. Each photo is aligned to the reference; the card shows which zones are fully in
+                            the frame and any quality problem. Name the phone model: samples must come from different
+                            phones. Exclude a photo to keep it without counting it.</p>
+                        <p>For defect samples, open <strong>Label</strong> and draw a box around each defect on the
+                            aligned photo; zone and subzone are detected from the box. Labels survive later zone
+                            edits. Defect types: missing, wrong part, shifted, rotated, contamination, damage,
+                            other.</p>
+                        <h4>Requirements for publishing</h4>
+                        <ul>
+                            <li>At least 15 good samples for every zone.</li>
+                            <li>At least 2 defect samples for every zone, and 1 for every critical subzone.</li>
+                            <li>Samples from at least 2 different phones.</li>
+                            <li>A reference that passed the quality check, and at least one zone.</li>
+                        </ul>
+                        <p>Fewer than 3 different good boards is a warning. A lead publishes on their own once
+                            nothing blocks; an admin may publish with unmet requirements.</p>
+                        <h4>Changing the reference</h4>
+                        <p>Samples are tied to the reference they were aligned to. After a new reference, re-align
+                            them with one click in step 4; until then they are not counted.</p>
+                        <h4>Shared recipes</h4>
+                        <p>A recipe without a group is shared: operators of every group can inspect with it. Only
+                            admins edit shared recipes in Studio.</p>
+                        <h4>Barcode mask</h4>
+                        <p>A prefix (e.g. "7334") that validates scanned serial numbers. If the scanned code does not
+                            start with it, a "Mask mismatch" warning appears during inspection.</p>
                     </div>
                 </div>
 
-                <!-- 4. Drawing Zones -->
+                <!-- 4. Inspection Zones -->
                 <div class="section" data-search>
                     <div class="section-hdr" onclick="toggleSection(this)">
                         <span class="section-num">4</span>
-                        <span class="section-title">Drawing Inspection Zones</span>
+                        <span class="section-title">Inspection Zones</span>
                         <span class="section-arrow">&#9654;</span>
                     </div>
                     <div class="section-body">
-                        <h4>Draw Zones</h4>
-                        <p>In Step 2, click and drag on the reference image to draw rectangular zones. Each zone is
-                            auto-labeled ("Zone 1", "Zone 2", etc.) and color-coded.</p>
-                        <h4>Zone Controls</h4>
-                        <ul>
-                            <li><strong>Rename:</strong> edit the text field on a zone chip.</li>
-                            <li><strong>Select:</strong> click the color dot to highlight the zone on the canvas.</li>
-                            <li><strong>Delete:</strong> click X on the zone chip.</li>
-                            <li><strong>Undo last / Clear all:</strong> buttons below the canvas.</li>
-                        </ul>
-                        <h4>Anchor Points</h4>
-                        <p>Click the crosshair icon on a zone chip to enter anchor mode. Place up to 2 anchor points on
-                            or near the zone. Anchors provide alignment guidance on the mobile camera — the phone shows
-                            where to position the board relative to detected features.</p>
-                        <h4>Subzones</h4>
-                        <p>Click the square icon on a zone chip to enter subzone mode. Draw up to 10 smaller rectangles
-                            inside the zone. Subzones trigger a separate, stricter analysis pass. Each subzone has its
-                            own status, defect %, and images. The zone's overall status = the worst status among all its
-                            subzones.</p>
-                        <h4>Canvas Zoom</h4>
-                        <p><span class="kbd">Ctrl</span>+scroll or use +/- buttons. Range: 100%–800%.</p>
-                        <h4>Save & Start</h4>
-                        <p>Click "Save zones & start check" to lock zones and proceed to Step 3.</p>
+                        <p>Zones are drawn in Recipe Studio, step 3, on the recipe's reference image. Click
+                            <strong>Save zones</strong> to store them in the draft.</p>
+                        <h4>Draw zones</h4>
+                        <p>Click and drag on the reference image. Each zone is labelled ("Zone 1", "Zone 2"…) and
+                            colour-coded. Rename it in the zone list, drag the handle to reorder, × to delete.</p>
+                        <h4>Anchor points</h4>
+                        <p>Click the crosshair in the zone list and place up to 2 anchors. On the phone they help the
+                            operator position the board.</p>
+                        <h4>Subzones and critical subzones</h4>
+                        <p>Click the square icon and draw up to 10 rectangles inside the zone. Subzones get a separate,
+                            stricter analysis; the zone status is the worst of the zone and its subzones. Tick
+                            <strong>critical</strong> where any deviation is a defect (a connector pin, a polarised
+                            part): every critical subzone needs its own defect sample before publishing. The optional
+                            "sens" field sets strictness for that subzone only.</p>
+                        <h4>Canvas zoom</h4>
+                        <p><span class="kbd">Ctrl</span>+scroll or the +/- buttons, 100%–800%.</p>
                     </div>
                 </div>
 
@@ -640,6 +654,10 @@
                         <h4>Subzone Analysis</h4>
                         <p>If the zone has subzones defined, each subzone is analyzed separately with stricter
                             thresholds. The zone status = worst of (zone result, all subzone results).</p>
+                        <h4>Strictness and recipe version</h4>
+                        <p>Thresholds come from the recipe's strictness (see section 1). The recipe badge shows the
+                            version in use, and the lead's notes for operators appear under it. Each saved result
+                            stores the recipe version.</p>
                         <h4>Result Display</h4>
                         <p>After each check: 5 images (input, reference, extracted, defect map, heatmap), statistics
                             (score, SSIM, defect %), a bar chart of all zone scores, and subzone details if applicable.
@@ -929,28 +947,30 @@ curl -s "$HOST/api/v1/results"
                         <table style="width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:13px">
                             <tr style="border-bottom:1px solid var(--border)">
                                 <td style="padding:4px 8px;color:var(--accent)">admin</td>
-                                <td style="padding:4px 8px">Full access to everything. No group restriction. Can manage
-                                    all templates, view all results, clear history.</td>
+                                <td style="padding:4px 8px">Full access to everything. No group restriction. Edits
+                                    all recipes in Recipe Studio, including shared ones; may publish a recipe with unmet
+                                    requirements; views all results, clears history.</td>
                             </tr>
                             <tr style="border-bottom:1px solid var(--border)">
                                 <td style="padding:4px 8px;color:var(--accent)">lead</td>
-                                <td style="padding:4px 8px">Belongs to a group. Can create, edit, delete, and restore
-                                    templates (own group + shared). Views results of own group only.</td>
+                                <td style="padding:4px 8px">Belongs to a group. Prepares, publishes and rolls back
+                                    recipes of their group in Recipe Studio; may override strictness for trial runs.
+                                    Views results of own group only.</td>
                             </tr>
                             <tr>
                                 <td style="padding:4px 8px;color:var(--accent)">operator</td>
-                                <td style="padding:4px 8px">Belongs to a group. Can use templates (own group + shared)
-                                    and run inspections. Cannot create/edit/delete templates. Views results of own group
-                                    only.</td>
+                                <td style="padding:4px 8px">Belongs to a group. Inspects with published recipes (own
+                                    group + shared) using the recipe's strictness. No Recipe Studio, no ad-hoc
+                                    references. Views results of own group only.</td>
                             </tr>
                         </table>
 
                         <p><span class="kw">Groups</span></p>
                         <p>Each non-admin user belongs to a <span class="kw">group</span> (e.g. "line1", "line2").
                             Groups isolate data:</p>
-                        <p>-- Templates with a group are visible only to that group's members.<br>
-                            -- Templates with no group (empty) are <span class="kw">shared</span> -- visible to
-                            everyone.<br>
+                        <p>-- Recipes with a group are visible only to that group's members.<br>
+                            -- Recipes with no group are <span class="kw">shared</span>: every group can inspect with
+                            them; only admins edit them.<br>
                             -- Inspection results are strictly filtered by group.<br>
                             -- Admin sees everything regardless of group.</p>
 
@@ -980,8 +1000,8 @@ curl -s "$HOST/api/v1/results"
     }
   }
 }</pre>
-                        <div class="note">Admin users have no "group" field. Templates saved by admin have empty group
-                            (shared). Lead can set group when saving templates.</div>
+                        <div class="note">Admin users have no "group" field. A lead's recipes get the lead's group; an
+                            admin chooses the group when creating a recipe (empty = shared).</div>
                     </div>
                 </div>
 
@@ -1085,25 +1105,22 @@ curl -s "$HOST/api/v1/results"
                         <p>Откройте URL приложения. На странице входа введите ключ доступа, выданный администратором.
                             Ключ привязан к имени оператора. Сеанс сохраняется 30 дней.</p>
                         <h4>Обзор интерфейса</h4>
-                        <p>Система работает в 3 шага:</p>
+                        <p>Операторы работают на экране инспекции:</p>
                         <ul>
-                            <li><strong>Шаг 1 — Загрузка:</strong> загрузка эталонного фото или выбор сохранённого
-                                шаблона.</li>
-                            <li><strong>Шаг 2 — Зоны:</strong> рисование зон инспекции на эталонном изображении.</li>
-                            <li><strong>Шаг 3 — Проверка:</strong> фотографирование зон, анализ, просмотр результатов.
-                            </li>
+                            <li><strong>Шаг 1 — Recipe:</strong> выбор опубликованного рецепта (название, версия, маска
+                                штрихкода).</li>
+                            <li><strong>Шаг 3 — Check:</strong> сканирование серийного номера, фото зон, просмотр
+                                результатов и сохранение.</li>
                         </ul>
+                        <p>У ведущих и админов есть ещё <strong>Recipe Studio</strong> (ссылка в шапке) для подготовки
+                            рецептов и быстрая проверка без рецепта (Шаг 2 — Zones) для проб.</p>
                         <p>Нажатие на индикатор <strong>Шаг 1</strong> в любой момент сбрасывает сессию и возвращает к
                             началу.</p>
-                        <h4>Настройки чувствительности</h4>
-                        <p>В заголовке страницы два поля:</p>
-                        <ul>
-                            <li><strong>Zone</strong> (0.00–2.00) — чувствительность детектирования дефектов на уровне
-                                зоны. По умолчанию: 0.50.</li>
-                            <li><strong>Subzone</strong> (0.00–2.00) — чувствительность на уровне подзон. По умолчанию:
-                                0.51.</li>
-                        </ul>
-                        <p>Большее значение = строже (больше дефектов определяется). Меньшее = мягче.</p>
+                        <h4>Строгость</h4>
+                        <p>Строгость проверки задаётся в рецепте (значения для зон и подзон 0.00–2.00, по умолчанию
+                            0.50 / 0.51; больше = строже). Оператор не может её менять. Ведущий и админ могут отметить
+                            <strong>Override</strong> в шапке для пробного прогона; без отметки используются значения
+                            рецепта.</p>
                     </div>
                 </div>
 
@@ -1111,60 +1128,86 @@ curl -s "$HOST/api/v1/results"
                 <div class="section" data-search>
                     <div class="section-hdr" onclick="toggleSection(this)">
                         <span class="section-num">2</span>
-                        <span class="section-title">Загрузка эталона</span>
+                        <span class="section-title">Эталон</span>
                         <span class="section-arrow">&#9654;</span>
                     </div>
                     <div class="section-body">
-                        <h4>Одно изображение</h4>
-                        <p>Перетащите (или выберите через диалог) одно фото эталона в область загрузки. Форматы:
-                            PNG, JPG, JPEG, BMP, WebP.</p>
-                        <h4>Блендинг нескольких фото</h4>
-                        <p>Загрузите 2+ фото одного и того же объекта. Система покажет панель блендинга:</p>
-                        <ul>
-                            <li><strong>Ручной блендинг:</strong> ползунки X/Y смещение и масштаб для каждого
-                                изображения. Нажмите "Blend (manual)".</li>
-                            <li><strong>Auto-align (SIFT):</strong> автоматическое выравнивание по особым точкам, затем
-                                усреднение. Лучший вариант при небольшом сдвиге кадров.</li>
-                            <li><strong>Readjust:</strong> вернуться к ползункам после просмотра результата.</li>
-                        </ul>
-                        <p>Блендинг нескольких фото уменьшает шум и даёт более чистый эталон.</p>
+                        <p>Эталон относится к рецепту и задаётся в <strong>Recipe Studio</strong>, шаг 2 (см. раздел
+                            3). У каждой версии рецепта свой эталон.</p>
+                        <h4>Проверка качества</h4>
+                        <p>Каждый эталон проверяется на резкость, экспозицию и разрешение. Красная оценка блокирует
+                            публикацию, жёлтая — предупреждение. Используйте резкое, равномерно освещённое фото заведомо
+                            исправной платы, снятое так же, как будут снимать операторы.</p>
+                        <h4>Склейка нескольких фото</h4>
+                        <p>«Blend several photos…» выравнивает 2+ снимка одной платы (SIFT, при необходимости по
+                            штрихкоду/QR) и усредняет их. Это уменьшает шум и блики.</p>
+                        <h4>Быстрая проверка без рецепта (ведущий / админ)</h4>
+                        <p>На экране инспекции осталась область загрузки для пробных проверок: эталон, зоны, проверка.
+                            У таких результатов нет версии рецепта. Операторы эту область не видят.</p>
                     </div>
                 </div>
 
                 <!-- 3 -->
-                <div class="section" data-search>
+                <div class="section" data-search id="studio-ru">
                     <div class="section-hdr" onclick="toggleSection(this)">
                         <span class="section-num">3</span>
-                        <span class="section-title">Шаблоны</span>
+                        <span class="section-title">Рецепты и Recipe Studio</span>
                         <span class="section-arrow">&#9654;</span>
                     </div>
                     <div class="section-body">
-                        <h4>Сохранённые шаблоны</h4>
-                        <p>Шаблоны хранят эталонное изображение + разметку зон для повторного использования.
-                            Отображаются карточками в Шаге 1: имя, маска штрихкода, версия, количество зон, дата
-                            создания.</p>
-                        <h4>Загрузить шаблон</h4>
-                        <p>Нажмите "Load" на карточке — сразу переход к Шагу 3 с готовыми зонами. Появляется бейдж
-                            "Recipe" с именем шаблона.</p>
-                        <h4>Сохранить как шаблон</h4>
-                        <p>В Шаге 2, после рисования зон, введите имя и опционально маску штрихкода, нажмите "Save
-                            Template".</p>
-                        <h4>Редактирование шаблона</h4>
-                        <p>Нажмите "Edit" — откроется полноэкранный редактор. Возможности:</p>
+                        <p><span class="kw">Рецепт</span> — всё, что нужно для контроля одного изделия: эталон, зоны и
+                            подзоны, строгость, заметки для операторов и образцы исправных и бракованных плат. Рецепты
+                            готовятся в <strong>Recipe Studio</strong> (<code>/studio</code>, ведущий и админ) и
+                            используются на экране инспекции.</p>
+                        <h4>Версии</h4>
+                        <p>У рецепта есть версии: <span class="kw">черновик</span> → <span class="kw">на линии</span>
+                            → <span class="kw">архив</span>. Операторы всегда проверяют по версии на линии. Правка
+                            рецепта открывает новый черновик, а линия работает на текущей версии, пока черновик не
+                            опубликуют. Любую архивную версию можно вернуть на линию из списка версий. Каждый
+                            результат инспекции хранит номер версии рецепта.</p>
+                        <h4>Шаги Studio</h4>
                         <ul>
-                            <li>Добавление, переименование, удаление и перетаскивание зон (ручка-захват).</li>
-                            <li>Рисование якорных точек и подзон (см. ниже).</li>
-                            <li>Изменение имени и маски штрихкода.</li>
-                            <li>Масштаб холста: <span class="kbd">Ctrl</span>+scroll или кнопки +/- (100%–800%).</li>
+                            <li><strong>1 Details:</strong> название, маска штрихкода, план съёмки (по зонам или плата
+                                целиком), заметки для операторов, строгость.</li>
+                            <li><strong>2 Reference:</strong> см. раздел 2.</li>
+                            <li><strong>3 Zones:</strong> см. раздел 4.</li>
+                            <li><strong>4 Good samples:</strong> фото заведомо исправных плат.</li>
+                            <li><strong>5 Defect samples:</strong> фото плат с известными дефектами, каждый отмечен
+                                рамкой.</li>
+                            <li><strong>6 Calibrate:</strong> появится в следующем релизе; собранные сейчас образцы
+                                будут использованы.</li>
+                            <li><strong>7 Publish:</strong> показывает, что мешает публикации, и выпускает черновик на
+                                линию.</li>
                         </ul>
-                        <h4>Версионирование</h4>
-                        <p>"Save changes" создаёт новую версию. Предыдущие версии видны в боковой панели. Нажатие на
-                            старую версию восстанавливает её (создаётся новая версия).</p>
-                        <h4>Удаление шаблона</h4>
-                        <p>Кнопка "Delete" на карточке. Требуется подтверждение.</p>
+                        <h4>Образцы</h4>
+                        <p>Снимайте так же, как будут снимать операторы: с рук, при обычном свете. Подключите телефон
+                            по QR-коду на шаге 4/5 (телефон использует те же настройки камеры, что и при инспекции) или
+                            загрузите фото с компьютера. Каждое фото выравнивается по эталону; на карточке видно, какие
+                            зоны целиком в кадре, и проблемы качества. Указывайте модель телефона: образцы должны быть с
+                            разных телефонов. «Exclude» оставляет фото, но не учитывает его.</p>
+                        <p>Для дефектных образцов откройте <strong>Label</strong> и обведите каждый дефект рамкой на
+                            выровненном фото; зона и подзона определяются по рамке. Разметка сохраняется при
+                            последующей правке зон. Типы дефектов: missing (нет компонента), wrong part (чужой),
+                            shifted (смещён), rotated (повёрнут), contamination (загрязнение), damage (повреждение),
+                            other.</p>
+                        <h4>Требования для публикации</h4>
+                        <ul>
+                            <li>Не меньше 15 хороших образцов на каждую зону.</li>
+                            <li>Не меньше 2 дефектных образцов на каждую зону и 1 на каждую критичную подзону.</li>
+                            <li>Образцы минимум с 2 разных телефонов.</li>
+                            <li>Эталон прошёл проверку качества, есть хотя бы одна зона.</li>
+                        </ul>
+                        <p>Меньше 3 разных исправных плат — предупреждение. Ведущий публикует сам, когда ничего не
+                            блокирует; админ может опубликовать и с невыполненными требованиями.</p>
+                        <h4>Смена эталона</h4>
+                        <p>Образцы привязаны к эталону, по которому выровнены. После замены эталона выровняйте их
+                            заново одной кнопкой на шаге 4; до этого они не учитываются.</p>
+                        <h4>Общие рецепты</h4>
+                        <p>Рецепт без группы — общий: по нему могут проверять операторы всех групп. Править общие
+                            рецепты в Studio может только админ.</p>
                         <h4>Маска штрихкода</h4>
-                        <p>Префикс (например "7334"), по которому валидируются сканированные серийные номера. Если код
-                            не начинается с маски — предупреждение "Mask mismatch".</p>
+                        <p>Префикс (например «7334»), по которому проверяются серийные номера. Если код не начинается с
+                            маски, при инспекции появляется предупреждение «Mask mismatch».</p>
                     </div>
                 </div>
 
@@ -1172,31 +1215,26 @@ curl -s "$HOST/api/v1/results"
                 <div class="section" data-search>
                     <div class="section-hdr" onclick="toggleSection(this)">
                         <span class="section-num">4</span>
-                        <span class="section-title">Разметка зон инспекции</span>
+                        <span class="section-title">Зоны инспекции</span>
                         <span class="section-arrow">&#9654;</span>
                     </div>
                     <div class="section-body">
+                        <p>Зоны рисуются в Recipe Studio, шаг 3, на эталоне рецепта. Нажмите <strong>Save
+                            zones</strong>, чтобы сохранить их в черновике.</p>
                         <h4>Рисование зон</h4>
-                        <p>В Шаге 2 кликните и перетащите мышь по эталонному изображению для создания прямоугольной
-                            зоны. Зоны автоматически нумеруются ("Zone 1", "Zone 2"...) и раскрашиваются.</p>
-                        <h4>Управление зонами</h4>
-                        <ul>
-                            <li><strong>Переименовать:</strong> редактируйте текстовое поле на чипе зоны.</li>
-                            <li><strong>Выбрать:</strong> нажмите на цветную точку — зона подсвечивается на холсте.</li>
-                            <li><strong>Удалить:</strong> кнопка X на чипе зоны.</li>
-                            <li><strong>Undo last / Clear all:</strong> кнопки под холстом.</li>
-                        </ul>
-                        <h4>Якорные точки (Anchors)</h4>
-                        <p>Нажмите значок прицела на чипе зоны. Поставьте до 2 якорных точек на изображении. При съёмке
-                            с мобильного камера покажет ориентиры для выравнивания объекта.</p>
-                        <h4>Подзоны (Subzones)</h4>
-                        <p>Нажмите значок квадрата на чипе. Нарисуйте до 10 прямоугольников внутри зоны. Подзоны
-                            анализируются отдельно с более строгими порогами. У каждой подзоны свой статус, % дефектов и
-                            изображения. Итоговый статус зоны = наихудший среди всех подзон.</p>
+                        <p>Кликните и протяните мышью по эталону. Зоны нумеруются («Zone 1», «Zone 2»…) и раскрашиваются.
+                            Переименование — в списке зон, порядок — перетаскиванием за ручку, удаление — ×.</p>
+                        <h4>Якорные точки</h4>
+                        <p>Нажмите значок прицела в списке зон и поставьте до 2 якорей. На телефоне они помогают
+                            оператору расположить плату.</p>
+                        <h4>Подзоны и критичные подзоны</h4>
+                        <p>Нажмите значок квадрата и нарисуйте до 10 прямоугольников внутри зоны. Подзоны
+                            анализируются отдельно и строже; статус зоны — худший из зоны и её подзон. Отметьте
+                            <strong>critical</strong> там, где любое отклонение — брак (вывод разъёма, полярный
+                            компонент): для каждой критичной подзоны перед публикацией нужен свой дефектный образец.
+                            Необязательное поле «sens» задаёт строгость только для этой подзоны.</p>
                         <h4>Масштаб холста</h4>
-                        <p><span class="kbd">Ctrl</span>+scroll или кнопки +/-. Диапазон: 100%–800%.</p>
-                        <h4>Сохранить и начать</h4>
-                        <p>Нажмите "Save zones & start check" для фиксации зон и перехода к Шагу 3.</p>
+                        <p><span class="kbd">Ctrl</span>+scroll или кнопки +/-, 100%–800%.</p>
                     </div>
                 </div>
 
@@ -1245,6 +1283,10 @@ curl -s "$HOST/api/v1/results"
                         <p>После каждой проверки: 5 изображений (вход, эталон, вырезка, карта дефектов, тепловая карта),
                             статистика, столбчатая диаграмма оценок всех зон, подзоны (если есть). Клик по изображению —
                             полноразмерный просмотр в лайтбоксе.</p>
+                        <h4>Строгость и версия рецепта</h4>
+                        <p>Пороги берутся из строгости рецепта (см. раздел 1). На плашке рецепта видна используемая
+                            версия, под ней — заметки ведущего для операторов. Каждый сохранённый результат хранит
+                            версию рецепта.</p>
                     </div>
                 </div>
 
@@ -1533,32 +1575,29 @@ curl -s "$HOST/api/v1/results"
                             <tr style="border-bottom:1px solid var(--border)">
                                 <td style="padding:4px 8px;color:var(--accent)">admin</td>
                                 <td style="padding:4px 8px">Полный доступ ко всему. Без ограничений по группе.
-                                    Управление
-                                    всеми шаблонами, просмотр всех результатов, очистка истории.</td>
+                                    Правит все рецепты в Recipe Studio, включая общие; может опубликовать рецепт с
+                                    невыполненными требованиями; видит все результаты, очищает историю.</td>
                             </tr>
                             <tr style="border-bottom:1px solid var(--border)">
                                 <td style="padding:4px 8px;color:var(--accent)">lead</td>
-                                <td style="padding:4px 8px">Принадлежит группе. Может создавать, редактировать, удалять
-                                    и
-                                    восстанавливать шаблоны (своей группы + общие). Видит результаты только своей
-                                    группы.</td>
+                                <td style="padding:4px 8px">Принадлежит группе. Готовит, публикует и откатывает рецепты
+                                    своей группы в Recipe Studio; может переопределить строгость для пробного прогона.
+                                    Видит результаты только своей группы.</td>
                             </tr>
                             <tr>
                                 <td style="padding:4px 8px;color:var(--accent)">operator</td>
-                                <td style="padding:4px 8px">Принадлежит группе. Может использовать шаблоны (своей группы
-                                    +
-                                    общие) и проводить инспекции. Не может создавать/редактировать/удалять шаблоны.
-                                    Видит
-                                    результаты только своей группы.</td>
+                                <td style="padding:4px 8px">Принадлежит группе. Проверяет по опубликованным рецептам
+                                    (своей группы + общим) со строгостью из рецепта. Нет доступа к Recipe Studio и
+                                    собственным эталонам. Видит результаты только своей группы.</td>
                             </tr>
                         </table>
 
                         <p><span class="kw">Группы</span></p>
                         <p>Каждый не-admin пользователь принадлежит <span class="kw">группе</span> (например "line1",
                             "line2"). Группы изолируют данные:</p>
-                        <p>-- Шаблоны с группой видны только участникам этой группы.<br>
-                            -- Шаблоны без группы (пустая) являются <span class="kw">общими</span> -- видны
-                            всем.<br>
+                        <p>-- Рецепты с группой видны только участникам этой группы.<br>
+                            -- Рецепты без группы — <span class="kw">общие</span>: по ним проверяют все группы, правит
+                            только админ.<br>
                             -- Результаты инспекций строго фильтруются по группе.<br>
                             -- Admin видит все, независимо от группы.</p>
 
@@ -1589,8 +1628,8 @@ curl -s "$HOST/api/v1/results"
     }
   }
 }</pre>
-                        <div class="note">У admin-пользователей нет поля "group". Шаблоны, сохраненные админом, имеют
-                            пустую группу (общие). Lead может задать группу при сохранении шаблона.</div>
+                        <div class="note">У admin-пользователей нет поля "group". Рецепты ведущего получают его группу;
+                            админ выбирает группу при создании рецепта (пусто = общий).</div>
                     </div>
                 </div>
 
@@ -1602,6 +1641,18 @@ curl -s "$HOST/api/v1/results"
         function toggleSection(hdr) {
             hdr.parentElement.classList.toggle('open');
         }
+
+        // /doc#studio (link from Recipe Studio) opens that section in both languages
+        (function () {
+            const id = location.hash.slice(1);
+            if (!id) return;
+            [id, id + '-ru'].forEach(x => {
+                const el = document.getElementById(x);
+                if (el && el.classList.contains('section')) el.classList.add('open');
+            });
+            const first = document.getElementById(id);
+            if (first) first.scrollIntoView();
+        })();
 
         // Search
         const searchInput = document.getElementById('doc-search');
