@@ -161,7 +161,9 @@
                 });
                 const data = await resp.json();
                 if (resp.ok) {
-                    window.location.href = '/';
+                    // A result link from the line system's log brings the user back to it.
+                    const next = new URLSearchParams(location.search).get('next') || '';
+                    window.location.href = /^\/r\/[A-Za-z0-9_-]+$/.test(next) ? next : '/';
                 } else {
                     err.textContent = data.error || 'Error';
                 }

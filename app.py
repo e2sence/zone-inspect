@@ -358,6 +358,9 @@ def _require_auth():
         # API calls get 401 JSON, browsers get redirect
         if request.path.startswith("/api/"):
             return jsonify({"error": "Unauthorized"}), 401
+        if path.startswith("/r/"):       # come back to the result after login
+            from urllib.parse import quote
+            return redirect("/login?next=" + quote(path, safe="/"))
         return redirect("/login")
     # Tag request with user
     request.auth_user = user
@@ -2089,6 +2092,150 @@ def api_v1_result_image(rid, fname):
     if not data:
         return jsonify({"error": "not found"}), 404
     return send_file(io.BytesIO(data), mimetype="image/jpeg")
+
+
+# ─── Verdict by serial number (for a line system that cannot call us back) ───
+# The line system runs a small script with the scanned serial at the end of an
+# operation (integrations/windows/zi_check.py); the script asks for the verdict
+# of the latest inspection of that board and turns it into an exit code.
+
+def _zone_effective_status(z: dict) -> str:
+    """ok | warn | defect | unchecked — same precedence as when a result is
+    saved: operator's zone decision > worst subzone > calculated zone status."""
+    if z.get("user_decision"):
+        return z["user_decision"]
+    subs = z.get("subzones") or []
+    if subs:
+        rank = {"ok": 0, "warn": 1, "defect": 2}
+        worst = max(rank.get(sz.get("user_decision") or sz.get("status"), 0)
+                    for sz in subs)
+        return ("ok", "warn", "defect")[worst]
+    return z.get("status") or "unchecked"
+
+
+def _verdict_from_record(doc: dict) -> dict:
+    """Pass only when every zone of the recipe was checked and is OK.
+    reason: ok | defect | incomplete | warn (the first that applies)."""
+    zones = doc.get("zones") or []
+    problems = []
+    for z in zones:
+        st = _zone_effective_status(z)
+        if st != "ok":
+            problems.append({"label": z.get("label", ""), "status": st})
+    statuses = {p["status"] for p in problems}
+    overall = doc.get("overall_status")
+    total = doc.get("zones_total", len(zones))
+    checked = doc.get("zones_checked", len(zones))
+    if "defect" in statuses or overall == "defect":
+        reason = "defect"
+    elif not zones or "unchecked" in statuses or checked < total:
+        reason = "incomplete"
+    elif "warn" in statuses or overall == "warn":
+        reason = "warn"
+    elif problems or overall != "ok":
+        reason = "incomplete"          # unknown status: never report a pass
+    else:
+        reason = "ok"
+    return {"verdict": "pass" if reason == "ok" else "fail",
+            "reason": reason, "problem_zones": problems,
+            "zones_total": total, "zones_checked": checked}
+
+
+def _public_base_url() -> str:
+    configured = app.config.get("BASE_URL", "")
+    if configured:
+        return configured.rstrip("/")
+    host = request.headers.get("X-Forwarded-Host", request.host)
+    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+    return f"{scheme}://{host}"
+
+
+@app.route("/api/v1/verdict")
+def api_v1_verdict():
+    """External API: verdict of the LATEST inspection of one serial number.
+    Query: serial (required, exact match, case-insensitive),
+           template (optional, exact recipe name),
+           max_age_hours (optional, ignore older inspections).
+    Always 200 when the question could be answered:
+      verdict = pass | fail | not_inspected."""
+    import re as _re
+    from datetime import datetime, timezone, timedelta
+    if not MONGO_AVAILABLE:
+        return jsonify({"error": "MongoDB unavailable"}), 503
+    serial = request.args.get("serial", "").strip()
+    if not serial or len(serial) > 200:
+        return jsonify({"error": "serial is required"}), 400
+
+    def _exact(value):
+        return {"$regex": f"^{_re.escape(value)}$", "$options": "i"}
+
+    conditions = [{"serial": _exact(serial)}]
+    template = request.args.get("template", "").strip()
+    if template:
+        conditions.append({"template_name": _exact(template)})
+    max_age = request.args.get("max_age_hours", type=float)
+    if max_age is not None:
+        if max_age <= 0:
+            return jsonify({"error": "max_age_hours must be positive"}), 400
+        # Result timestamps are stored as UTC+8 wall-clock strings.
+        cutoff = datetime.now(timezone(timedelta(hours=8))) - timedelta(hours=max_age)
+        conditions.append(
+            {"timestamp": {"$gte": cutoff.strftime("%Y-%m-%dT%H:%M:%S.%f")}})
+    grp_f = _group_filter()
+    if grp_f:
+        conditions.append(grp_f)
+    mongo_filter = {"$and": conditions}
+
+    out = {"serial": serial, "verdict": "not_inspected", "reason": "not_found",
+           "inspections": 0}
+    # "unrecognized" is what a result gets when no code was read off the board.
+    if serial.lower() == "unrecognized":
+        return jsonify(out)
+    doc = _results_col.find_one(mongo_filter, {"_id": 0},
+                                sort=[("timestamp", -1)])
+    if not doc:
+        return jsonify(out)
+    rid = doc.get("result_id", "")
+    out.update(_verdict_from_record(doc))
+    out.update({
+        "serial": doc.get("serial", serial),
+        "inspections": _results_col.count_documents(mongo_filter),
+        "result_id": rid,
+        "timestamp": doc.get("timestamp", ""),
+        "template": doc.get("template_name", ""),
+        "recipe_version": doc.get("recipe_version"),
+        "operator": doc.get("operator", ""),
+        "url": f"{_public_base_url()}/r/{rid}",
+    })
+    return jsonify(out)
+
+
+@app.route("/r/<rid>")
+def result_page(rid):
+    """Read-only page of one saved result — the link written to the line
+    system's log. Needs a normal login (operator / lead / admin)."""
+    import re as _re
+    if not _re.match(r'^[a-zA-Z0-9_\-]+$', rid):
+        return "Invalid result id", 400
+    if not MONGO_AVAILABLE:
+        return "Database unavailable", 503
+    q = {"result_id": rid}
+    q.update(_group_filter())
+    doc = _results_col.find_one(q, {"_id": 0})
+    if not doc:
+        return "Result not found", 404
+    zones = []
+    for i, z in enumerate(doc.get("zones") or []):
+        zones.append({
+            "label": z.get("label", ""),
+            "status": _zone_effective_status(z),
+            "calculated": z.get("status", "unchecked"),
+            "decided": bool(z.get("user_decision")),
+            "image": f"/api/results/{rid}/image/{z['image']}" if z.get("image") else "",
+            "reference": f"/api/results/{rid}/image/ref_{i}.jpg" if z.get("image") else "",
+        })
+    return render_template("result.html", r=doc, zones=zones,
+                           v=_verdict_from_record(doc))
 
 
 # ─── Internal results API (operators, full scope) ────────────────────────────

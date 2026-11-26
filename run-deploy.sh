@@ -61,8 +61,9 @@ die() { echo -e "${RED}$*${NC}" >&2; exit 1; }
 
 # Runtime files that belong on the server: tracked by git, nothing else.
 list_deploy_files() {
-    git -C "$LOCAL_DIR" ls-files -- '*.py' static templates requirements-prod.txt \
-        | grep -v '^tests/' | sort
+    # ':(glob)*.py' = top-level modules only (not tests/ or integrations/).
+    git -C "$LOCAL_DIR" ls-files -- ':(glob)*.py' static templates requirements-prod.txt \
+        | sort
 }
 
 local_md5() {

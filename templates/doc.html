@@ -275,7 +275,8 @@
             margin-top: 0
         }
 
-        .section-body ul {
+        .section-body ul,
+        .section-body ol {
             margin: 4px 0 6px 16px;
             color: var(--text);
         }
@@ -980,6 +981,29 @@ curl -s -H "X-Auth-Key: $KEY" \
                         <pre># 5. Without a key — expect 401
 curl -s "$HOST/api/v1/results"
 # {"error": "Unauthorized"}</pre>
+                        <h4>Verdict by Serial Number</h4>
+                        <p><code>GET /api/v1/verdict?serial={serial}</code></p>
+                        <p>Answers one question: did the <b>latest</b> saved inspection of this board pass?
+                            The serial must match exactly (letter case and surrounding spaces are ignored).
+                            Optional filters: <code>template</code> (exact recipe name) and
+                            <code>max_age_hours</code> (ignore older inspections).</p>
+                        <ul>
+                            <li><code>"verdict": "pass"</code> — every zone of the recipe was checked and is OK
+                                (the operator's decisions are taken into account)</li>
+                            <li><code>"verdict": "fail"</code> — <code>reason</code> is <code>defect</code>,
+                                <code>warn</code> (a warning nobody decided on) or <code>incomplete</code>
+                                (unchecked zones)</li>
+                            <li><code>"verdict": "not_inspected"</code> — no saved inspection for this serial</li>
+                        </ul>
+                        <p>The answer also has <code>problem_zones</code>, <code>template</code>,
+                            <code>operator</code>, <code>timestamp</code>, <code>inspections</code> (how many
+                            times this serial was inspected) and <code>url</code> — a page with the result
+                            for people (<code>/r/{result_id}</code>, needs a normal login).</p>
+                        <pre>curl -H "X-Auth-Key: apk_..." \
+  "https://your-host/api/v1/verdict?serial=SN-12345"</pre>
+
+                        <p>A ready-made script that turns this verdict into an exit code for a line system
+                            is described in section 13, <b>Line System Integration</b>.</p>
                     </div>
                 </div>
 
@@ -1052,6 +1076,176 @@ curl -s "$HOST/api/v1/results"
 }</pre>
                         <div class="note">Admin users have no "group" field. A lead's recipes get the lead's group; an
                             admin chooses the group when creating a recipe (empty = shared).</div>
+                    </div>
+                </div>
+
+                <!-- 13. Line System Integration -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">13</span>
+                        <span class="section-title">Line System Integration</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <div class="note">For a line system (MES) that cannot call Zone Inspect directly, but at the
+                            end of an operation can scan the serial number, run a program with it and keep
+                            the program's output as the operation log.</div>
+                        <h4>How It Works</h4>
+                        <ol>
+                            <li>The operator inspects the board in Zone Inspect as usual and <b>saves</b> the result.
+                                The serial number is read from the board during the inspection.</li>
+                            <li>At the end of the operation the line system scans the serial number and runs
+                                <code>zi_check.py</code> with it.</li>
+                            <li>The script asks the server for the verdict of the latest inspection of this
+                                serial number, prints it and exits. The last line of the output and the exit
+                                code tell the line system whether the board may go on.</li>
+                        </ol>
+                        <p>The line system keeps the whole output, including the link to the result page.</p>
+                        <h4>What Counts as a Pass</h4>
+                        <ul>
+                            <li>Every zone of the recipe was checked and is OK. The operator's decisions count:
+                                a zone the operator accepted is OK, a zone the operator rejected is a defect.</li>
+                            <li>Only the <b>latest</b> saved inspection of the serial number counts. After a repair,
+                                inspect the board again — the new result replaces the old one.</li>
+                            <li>A warning that nobody decided on, or a result saved with unchecked zones, is
+                                <b>not</b> a pass.</li>
+                            <li>A board that was never inspected is <b>not</b> a pass, and neither is a board whose
+                                serial number was not read during the inspection.</li>
+                        </ul>
+                        <h4>Output</h4>
+                        <p>A good board:</p>
+                        <pre>ZONE-INSPECT CHECK SN=SN-12345
+VERDICT=PASS
+reason=all zones OK
+recipe=Board-X v3
+operator=ivanov
+inspected=2026-11-26T17:41:02 (UTC+8)
+zones=5/5 checked
+result=https://your-host/r/a1b2c3d4_20261126_174102_9f3a
+EXIT WITH ERRORLEVEL==0</pre>
+                        <p>A board with a defect:</p>
+                        <pre>ZONE-INSPECT CHECK SN=SN-12345
+VERDICT=FAIL
+reason=defect found
+recipe=Board-X v3
+operator=ivanov
+inspected=2026-11-26T17:41:02 (UTC+8)
+zones=5/5 checked
+zone IC U5 = DEFECT
+result=https://your-host/r/a1b2c3d4_20261126_174102_9f3a
+EXIT WITH ERRORLEVEL==1</pre>
+                        <p>The <b>last line</b> is always <code>EXIT WITH ERRORLEVEL==N</code>, and the process
+                            exit code is the same N:</p>
+                        <table style="width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:13px">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==0</td>
+                                <td style="padding:4px 8px">Inspected, every zone OK.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==1</td>
+                                <td style="padding:4px 8px">Defect, undecided warning or unfinished inspection. The <code>reason=</code> and <code>zone ...</code> lines say which.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==2</td>
+                                <td style="padding:4px 8px">No saved inspection for this serial number.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==3</td>
+                                <td style="padding:4px 8px">No answer: network, key or settings. The <code>error=</code> line says which. The board was not judged.</td>
+                            </tr>
+                        </table>
+                        <h4>Station Setup</h4>
+                        <p>Needs Python 3.7 or newer; nothing else has to be installed.</p>
+                        <ol>
+                            <li>Copy <code>zi_check.py</code> and <code>zi_check.ini.example</code> from
+                                <code>integrations/windows/</code> to a folder on the station, e.g.
+                                <code>C:\work\zone_inspect</code>.</li>
+                            <li>Rename <code>zi_check.ini.example</code> to <code>zi_check.ini</code> and fill in
+                                <code>url</code> and <code>key</code>.</li>
+                            <li>Check it by hand in a command prompt, with the serial of a board that has
+                                been inspected:
+                                <code>C:\Python37\python.exe C:\work\zone_inspect\zi_check.py SN-12345</code></li>
+                        </ol>
+                        <p><span class="kw">zi_check.ini</span></p>
+                        <pre>[zone-inspect]
+url = https://your-host
+key = apk_...
+
+;template = Board-X
+;max_age_hours = 24
+;timeout = 8
+;ca_file = cacert.pem</pre>
+                        <ul>
+                            <li><code>url</code>, <code>key</code> — server address and a read-only API key</li>
+                            <li><code>template</code> — optional: accept only inspections made with this recipe
+                                (exact name). Without it, an inspection with any recipe counts.</li>
+                            <li><code>max_age_hours</code> — optional: ignore inspections older than this</li>
+                            <li><code>timeout</code> — optional: seconds to wait for the server, 8 by default</li>
+                            <li><code>ca_file</code> — optional: file with root certificates, for computers whose
+                                own certificates are outdated</li>
+                        </ul>
+                        <div class="note"><code>zi_check.ini</code> holds an access key. Keep it on the station
+                            only; do not put it in shared folders.</div>
+                        <h4>Line System Settings</h4>
+                        <table style="width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:13px">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Executable program</td>
+                                <td style="padding:4px 8px"><code>C:\Python37\python.exe</code></td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Parameter string</td>
+                                <td style="padding:4px 8px"><code>C:\work\zone_inspect\zi_check.py {0}</code></td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Test duration</td>
+                                <td style="padding:4px 8px">15 s or more (a few seconds longer than <code>timeout</code>)</td>
+                            </tr>
+                        </table>
+                        <p><code>{0}</code> is where the line system puts the scanned serial number.
+                            A different settings file can be given as a second parameter:
+                            <code>zi_check.py {0} D:\cfg\line2.ini</code>.</p>
+                        <h4>API Key (administrator)</h4>
+                        <p>Add a read-only key to <code>auth_keys.json</code> on the server; no restart is needed.
+                            A key with a <code>group</code> sees only that group's inspections — use the group
+                            of the operators who inspect on this line.</p>
+                        <pre>"api_keys": {
+  "apk_LONG_RANDOM_STRING": {
+    "name": "MES gate, line 1",
+    "scope": "read",
+    "group": "line1"
+  }
+}</pre>
+                        <h4>If Something Goes Wrong</h4>
+                        <table style="width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:13px">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Code 2 for an inspected board</td>
+                                <td style="padding:4px 8px">The serial scanned by the line system differs from the code Zone Inspect read from the board (another barcode on the board, a prefix, a missing character). Compare with the serial shown in History. Also check that the result was saved, and that <code>template</code> / <code>max_age_hours</code> do not exclude it.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Code 2, the key has a group</td>
+                                <td style="padding:4px 8px">The board was inspected by operators of another group; the key does not see their results.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">the key is not accepted</td>
+                                <td style="padding:4px 8px">Wrong <code>key</code> in <code>zi_check.ini</code>, or the key was removed on the server.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">secure connection failed</td>
+                                <td style="padding:4px 8px">Outdated root certificates on the station. Save a current certificate bundle next to the script and set <code>ca_file</code>.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">cannot reach ... / no answer within</td>
+                                <td style="padding:4px 8px">No network route to the server or a proxy in between. Open the server address in a browser on the same station.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">settings file not found</td>
+                                <td style="padding:4px 8px"><code>zi_check.ini</code> is not next to <code>zi_check.py</code>.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">no serial number was passed</td>
+                                <td style="padding:4px 8px">The parameter string has no <code>{0}</code>, or the scan was empty.</td>
+                            </tr>
+                        </table>
                     </div>
                 </div>
 
@@ -1654,6 +1848,29 @@ curl -s -H "X-Auth-Key: $KEY" \
                         <pre># 5. Без ключа — ожидаем 401
 curl -s "$HOST/api/v1/results"
 # {"error": "Unauthorized"}</pre>
+                        <h4>Вердикт по серийному номеру</h4>
+                        <p><code>GET /api/v1/verdict?serial={serial}</code></p>
+                        <p>Отвечает на один вопрос: прошла ли плата <b>последнюю</b> сохранённую проверку.
+                            Серийный номер должен совпадать точно (регистр букв и пробелы по краям не важны).
+                            Необязательные фильтры: <code>template</code> (точное имя рецепта) и
+                            <code>max_age_hours</code> (не учитывать более старые проверки).</p>
+                        <ul>
+                            <li><code>"verdict": "pass"</code> — все зоны рецепта проверены и годны
+                                (решения оператора учитываются)</li>
+                            <li><code>"verdict": "fail"</code> — <code>reason</code> равен <code>defect</code>,
+                                <code>warn</code> (предупреждение, по которому никто не принял решение) или
+                                <code>incomplete</code> (есть непроверенные зоны)</li>
+                            <li><code>"verdict": "not_inspected"</code> — сохранённой проверки с таким номером нет</li>
+                        </ul>
+                        <p>В ответе также есть <code>problem_zones</code>, <code>template</code>,
+                            <code>operator</code>, <code>timestamp</code>, <code>inspections</code> (сколько раз
+                            проверяли этот номер) и <code>url</code> — страница результата для людей
+                            (<code>/r/{result_id}</code>, нужен обычный вход).</p>
+                        <pre>curl -H "X-Auth-Key: apk_..." \
+  "https://your-host/api/v1/verdict?serial=SN-12345"</pre>
+
+                        <p>Готовый скрипт, который превращает этот вердикт в код возврата для АСУТП,
+                            описан в разделе 13, <b>Интеграция с АСУТП</b>.</p>
                     </div>
                 </div>
 
@@ -1727,6 +1944,176 @@ curl -s "$HOST/api/v1/results"
 }</pre>
                         <div class="note">У admin-пользователей нет поля "group". Рецепты ведущего получают его группу;
                             админ выбирает группу при создании рецепта (пусто = общий).</div>
+                    </div>
+                </div>
+
+                <!-- 13. Line System Integration (RU) -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">13</span>
+                        <span class="section-title">Интеграция с АСУТП</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <div class="note">Для АСУТП (MES), которая не может обращаться к Zone Inspect напрямую, но в
+                            конце операции умеет отсканировать серийный номер, запустить с ним программу и
+                            сохранить её вывод как лог операции.</div>
+                        <h4>Как это работает</h4>
+                        <ol>
+                            <li>Оператор проверяет плату в Zone Inspect как обычно и <b>сохраняет</b> результат.
+                                Серийный номер считывается с платы во время проверки.</li>
+                            <li>В конце операции АСУТП сканирует серийный номер и запускает с ним
+                                <code>zi_check.py</code>.</li>
+                            <li>Скрипт запрашивает у сервера вердикт последней проверки этого номера, печатает
+                                его и завершается. Последняя строка вывода и код возврата сообщают АСУТП,
+                                можно ли пропустить плату дальше.</li>
+                        </ol>
+                        <p>АСУТП сохраняет весь вывод, включая ссылку на страницу результата.</p>
+                        <h4>Что считается годным</h4>
+                        <ul>
+                            <li>Все зоны рецепта проверены и годны. Решения оператора учитываются: зона,
+                                которую оператор принял, годна; зона, которую оператор забраковал, — дефект.</li>
+                            <li>Учитывается только <b>последняя</b> сохранённая проверка номера. После ремонта
+                                проверьте плату заново — новый результат заменит старый.</li>
+                            <li>Предупреждение, по которому никто не принял решение, и результат, сохранённый с
+                                непроверенными зонами, годными <b>не</b> считаются.</li>
+                            <li>Плата, которую не проверяли, годной <b>не</b> считается — как и плата, чей
+                                серийный номер не был считан при проверке.</li>
+                        </ul>
+                        <h4>Вывод</h4>
+                        <p>Годная плата:</p>
+                        <pre>ZONE-INSPECT CHECK SN=SN-12345
+VERDICT=PASS
+reason=all zones OK
+recipe=Board-X v3
+operator=ivanov
+inspected=2026-11-26T17:41:02 (UTC+8)
+zones=5/5 checked
+result=https://your-host/r/a1b2c3d4_20261126_174102_9f3a
+EXIT WITH ERRORLEVEL==0</pre>
+                        <p>Плата с дефектом:</p>
+                        <pre>ZONE-INSPECT CHECK SN=SN-12345
+VERDICT=FAIL
+reason=defect found
+recipe=Board-X v3
+operator=ivanov
+inspected=2026-11-26T17:41:02 (UTC+8)
+zones=5/5 checked
+zone IC U5 = DEFECT
+result=https://your-host/r/a1b2c3d4_20261126_174102_9f3a
+EXIT WITH ERRORLEVEL==1</pre>
+                        <p><b>Последняя строка</b> всегда <code>EXIT WITH ERRORLEVEL==N</code>, и код возврата
+                            процесса равен тому же N:</p>
+                        <table style="width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:13px">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==0</td>
+                                <td style="padding:4px 8px">Плата проверена, все зоны годны.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==1</td>
+                                <td style="padding:4px 8px">Дефект, нерешённое предупреждение или незаконченная проверка. Что именно — в строках <code>reason=</code> и <code>zone ...</code>.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==2</td>
+                                <td style="padding:4px 8px">Сохранённой проверки с таким серийным номером нет.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==3</td>
+                                <td style="padding:4px 8px">Ответа нет: сеть, ключ или настройки. Причина — в строке <code>error=</code>. Плата не оценивалась.</td>
+                            </tr>
+                        </table>
+                        <h4>Настройка станции</h4>
+                        <p>Нужен Python 3.7 или новее; больше ничего устанавливать не надо.</p>
+                        <ol>
+                            <li>Скопируйте <code>zi_check.py</code> и <code>zi_check.ini.example</code> из
+                                <code>integrations/windows/</code> в папку на станции, например
+                                <code>C:\work\zone_inspect</code>.</li>
+                            <li>Переименуйте <code>zi_check.ini.example</code> в <code>zi_check.ini</code> и
+                                заполните <code>url</code> и <code>key</code>.</li>
+                            <li>Проверьте вручную в командной строке, с номером уже проверенной платы:
+                                <code>C:\Python37\python.exe C:\work\zone_inspect\zi_check.py SN-12345</code></li>
+                        </ol>
+                        <p><span class="kw">zi_check.ini</span></p>
+                        <pre>[zone-inspect]
+url = https://your-host
+key = apk_...
+
+;template = Board-X
+;max_age_hours = 24
+;timeout = 8
+;ca_file = cacert.pem</pre>
+                        <ul>
+                            <li><code>url</code>, <code>key</code> — адрес сервера и API-ключ только для чтения</li>
+                            <li><code>template</code> — необязательно: учитывать только проверки по этому рецепту
+                                (точное имя). Без него годится проверка по любому рецепту.</li>
+                            <li><code>max_age_hours</code> — необязательно: не учитывать проверки старше
+                                указанного числа часов</li>
+                            <li><code>timeout</code> — необязательно: сколько секунд ждать сервер, по умолчанию 8</li>
+                            <li><code>ca_file</code> — необязательно: файл с корневыми сертификатами для
+                                компьютеров, где собственные сертификаты устарели</li>
+                        </ul>
+                        <div class="note">В <code>zi_check.ini</code> лежит ключ доступа. Храните файл только на
+                            станции, не кладите его в общие папки.</div>
+                        <h4>Настройки в АСУТП</h4>
+                        <table style="width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:13px">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Исполняемая программа</td>
+                                <td style="padding:4px 8px"><code>C:\Python37\python.exe</code></td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Строка параметров</td>
+                                <td style="padding:4px 8px"><code>C:\work\zone_inspect\zi_check.py {0}</code></td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Продолжительность теста</td>
+                                <td style="padding:4px 8px">15 с или больше (на несколько секунд больше, чем <code>timeout</code>)</td>
+                            </tr>
+                        </table>
+                        <p>На место <code>{0}</code> АСУТП подставляет отсканированный серийный номер.
+                            Другой файл настроек можно передать вторым параметром:
+                            <code>zi_check.py {0} D:\cfg\line2.ini</code>.</p>
+                        <h4>API-ключ (администратор)</h4>
+                        <p>Добавьте ключ только для чтения в <code>auth_keys.json</code> на сервере; перезапуск
+                            не нужен. Ключ с полем <code>group</code> видит проверки только этой группы —
+                            укажите группу операторов, которые проверяют платы на этой линии.</p>
+                        <pre>"api_keys": {
+  "apk_LONG_RANDOM_STRING": {
+    "name": "MES gate, line 1",
+    "scope": "read",
+    "group": "line1"
+  }
+}</pre>
+                        <h4>Если что-то пошло не так</h4>
+                        <table style="width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:13px">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Код 2 для проверенной платы</td>
+                                <td style="padding:4px 8px">Номер, отсканированный АСУТП, отличается от кода, который Zone Inspect считал с платы (другой штрихкод на плате, префикс, потерянный символ). Сравните с номером в Истории. Проверьте также, что результат сохранён и что <code>template</code> / <code>max_age_hours</code> его не отсекают.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Код 2, у ключа задана группа</td>
+                                <td style="padding:4px 8px">Плату проверяли операторы другой группы; ключ не видит их результаты.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">the key is not accepted</td>
+                                <td style="padding:4px 8px">Неверный <code>key</code> в <code>zi_check.ini</code>, или ключ удалён на сервере.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">secure connection failed</td>
+                                <td style="padding:4px 8px">На станции устарели корневые сертификаты. Сохраните актуальный набор сертификатов рядом со скриптом и укажите <code>ca_file</code>.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">cannot reach ... / no answer within</td>
+                                <td style="padding:4px 8px">Нет сетевого доступа к серверу или мешает прокси. Откройте адрес сервера в браузере на этой же станции.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">settings file not found</td>
+                                <td style="padding:4px 8px"><code>zi_check.ini</code> лежит не рядом с <code>zi_check.py</code>.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">no serial number was passed</td>
+                                <td style="padding:4px 8px">В строке параметров нет <code>{0}</code>, или сканирование было пустым.</td>
+                            </tr>
+                        </table>
                     </div>
                 </div>
 
