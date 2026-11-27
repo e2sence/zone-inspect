@@ -199,3 +199,53 @@ class TestVerdictApi:
                   group="line2")
         client.set_cookie("pcb_auth_key", "test-operator-key-2222")
         assert client.get("/r/vt_page_g2").status_code == 404
+
+
+@pytest.mark.auth
+@pytest.mark.mongo
+class TestResultImagesRespectGroup:
+    """Result images are addressed by result id alone; a key of another
+    group must not get them."""
+
+    ROUTES = ("/api/results/{}/image/zone_0.jpg",
+              "/api/v1/results/{}/images/zone_0.jpg")
+
+    @pytest.fixture(autouse=True)
+    def _data(self, mongo_available):
+        if not mongo_available:
+            pytest.skip("MongoDB not available")
+        import app as app_module
+        from tests.conftest import FAKE_R2
+        col = app_module._results_col
+        rids = {"vt_img_l1": "line1", "vt_img_l2": "line2", "vt_img_none": ""}
+        for rid, group in rids.items():
+            col.insert_one({"result_id": rid, "group": group, "serial": "VT-IMG",
+                            "timestamp": "2026-11-26T10:00:00.000000"})
+            FAKE_R2[f"results/{rid}/zone_0.jpg"] = b"\xff\xd8jpeg"
+        yield
+        col.delete_many({"result_id": {"$in": list(rids)}})
+        for rid in rids:
+            FAKE_R2.pop(f"results/{rid}/zone_0.jpg", None)
+
+    def _codes(self, client, rid, key):
+        return [client.get(route.format(rid), headers={"X-Auth-Key": key}).status_code
+                for route in self.ROUTES]
+
+    def test_operator_gets_own_group_only(self, client):
+        key = "test-operator-key-2222"                      # line1
+        assert self._codes(client, "vt_img_l1", key) == [200, 200]
+        assert self._codes(client, "vt_img_l2", key) == [404, 404]
+        assert self._codes(client, "vt_img_none", key) == [404, 404]
+
+    def test_group_api_key_gets_own_group_only(self, client):
+        key = "apk_test-read-key"                           # line1, /api/v1 only
+        assert self._codes(client, "vt_img_l1", key) == [403, 200]
+        assert self._codes(client, "vt_img_l2", key) == [403, 404]
+
+    def test_admin_gets_everything(self, client):
+        key = "test-admin-key-0000"
+        for rid in ("vt_img_l1", "vt_img_l2", "vt_img_none"):
+            assert self._codes(client, rid, key) == [200, 200]
+
+    def test_missing_result_is_404(self, client):
+        assert self._codes(client, "vt_img_absent", "test-admin-key-0000") == [404, 404]

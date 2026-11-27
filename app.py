@@ -1976,6 +1976,20 @@ def update_result(sid):
     return jsonify({"status": "ok", "overall": overall, "result_id": rid})
 
 
+def _result_visible(rid: str) -> bool:
+    """May the current user or API key see this saved result? Images are
+    stored by result id, so the image routes ask this before serving one."""
+    grp_f = _group_filter()
+    if not grp_f:                      # admin, or an API key without a group
+        return True
+    if MONGO_AVAILABLE:
+        q = {"result_id": rid}
+        q.update(grp_f)
+        return _results_col.find_one(q, {"_id": 1}) is not None
+    meta = r2.download_json(f"results/{rid}/meta.json") or {}
+    return meta.get("group") == grp_f.get("group")
+
+
 # ─── External API v1 (read-only, for integrations) ───────────────────────────
 
 @app.route("/api/v1/results")
@@ -2088,6 +2102,8 @@ def api_v1_result_image(rid, fname):
     if (not re.match(r'^[a-zA-Z0-9_\-]+$', rid)
             or not re.match(r'^[a-zA-Z0-9_\-]+\.jpg$', fname)):
         return jsonify({"error": "invalid"}), 400
+    if not _result_visible(rid):       # same answer as for a missing image
+        return jsonify({"error": "not found"}), 404
     data = r2.download_bytes(f"results/{rid}/{fname}")
     if not data:
         return jsonify({"error": "not found"}), 404
@@ -2309,6 +2325,8 @@ def result_image(rid, fname):
     import re
     if not re.match(r'^[a-zA-Z0-9_\-]+$', rid) or not re.match(r'^[a-zA-Z0-9_\-]+\.jpg$', fname):
         return jsonify({"error": "invalid"}), 400
+    if not _result_visible(rid):       # same answer as for a missing image
+        return jsonify({"error": "not found"}), 404
     data = r2.download_bytes(f"results/{rid}/{fname}")
     if not data:
         return jsonify({"error": "not found"}), 404
