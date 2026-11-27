@@ -230,6 +230,36 @@ def _similarity_from_feats(a_feats, b_feats) -> float:
     return round(min(max(score, 0.0), 1.0), 4)
 
 
+# Layers read by _similarity_from_feats and analyze_defects_nn (PATCH_LAYER=5,
+# global=7). Cached reference features keep only these (~0.6 MB per image
+# instead of ~2.3 MB with the early layers).
+CACHE_LAYERS = (5, 7)
+
+
+@torch.no_grad()
+def reference_features(images: list[np.ndarray], preprocess=None):
+    """Features of constant reference crops, for caching per session.
+    Returns list of (glob, feats) with feats restricted to CACHE_LAYERS
+    and detached from the batch tensor (safe to keep long-term)."""
+    out = []
+    for glob, feats in extract_features_batch(images, preprocess):
+        out.append((glob.clone(),
+                    {k: feats[k].clone() for k in CACHE_LAYERS}))
+    return out
+
+
+@torch.no_grad()
+def similarity_nn_cached(ref_feats: list, images: list[np.ndarray]) -> list[float]:
+    """Same scores as similarity_nn_batch(zip(refs, images)), but with the
+    reference side taken from reference_features() — one forward pass for
+    the photo crops only."""
+    if not images:
+        return []
+    ext = extract_features_batch(images)
+    return [_similarity_from_feats(rf[1], ef[1])
+            for rf, ef in zip(ref_feats, ext)]
+
+
 @torch.no_grad()
 def similarity_nn_batch(pairs: list[tuple[np.ndarray, np.ndarray]]) -> list[float]:
     """
@@ -258,58 +288,93 @@ def similarity_nn_batch(pairs: list[tuple[np.ndarray, np.ndarray]]) -> list[floa
     return scores
 
 
-def align_photo_to_ref(ref_img: np.ndarray, photo: np.ndarray):
+def flann_knn(des1, des2, k=2, checks=50):
+    """FLANN kd-tree kNN match, deterministic.
+
+    FLANN builds randomized kd-trees from OpenCV's RNG, whose state otherwise
+    depends on every earlier call in the thread — the same photo could then
+    align slightly differently (and flip a verdict) depending on what the
+    server processed before. Seeding per call makes results reproducible;
+    cv::theRNG() is thread-local, so concurrent requests don't interfere.
+    """
+    cv2.setRNGSeed(0)
+    flann = cv2.FlannBasedMatcher(dict(algorithm=1, trees=5),
+                                  dict(checks=checks))
+    return flann.knnMatch(des1, des2, k=k)
+
+
+_ALIGN_MAX_DIM = 1200
+
+
+def reference_sift(ref_img: np.ndarray):
+    """SIFT of the reference for align_photo_to_ref — constant per template,
+    so callers compute it once per session and pass it back in.
+    Returns (keypoint coords Nx2 float32, descriptors, scale)."""
+    rh, rw = ref_img.shape[:2]
+    r_scale = min(_ALIGN_MAX_DIM / max(rh, rw), 1.0)
+    ref_small = cv2.resize(ref_img, None, fx=r_scale, fy=r_scale)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    ref_gray = clahe.apply(cv2.cvtColor(ref_small, cv2.COLOR_BGR2GRAY))
+    kp, des = cv2.SIFT_create(nfeatures=5000).detectAndCompute(ref_gray, None)
+    pts = np.float32([k.pt for k in kp]).reshape(-1, 2)
+    return pts, des, r_scale
+
+
+def align_photo_to_ref(ref_img: np.ndarray, photo: np.ndarray, ref_sift=None):
     """
     Глобальное выравнивание: warp фото в координаты референса.
     Вызывать ОДИН РАЗ на фото — затем кропать зоны из результата.
+    ref_sift: результат reference_sift(ref_img) (кэш на сессию), иначе считается.
     Returns: warped photo (same size as ref_img) or None.
     """
-    max_dim = 1200
+    M_full, _ = estimate_homography(ref_img, photo, ref_sift)
+    if M_full is None:
+        return None
     rh, rw = ref_img.shape[:2]
+    return cv2.warpPerspective(photo, M_full, (rw, rh))
+
+
+def estimate_homography(ref_img: np.ndarray, photo: np.ndarray, ref_sift=None, nfeatures: int = 5000):
+    """Homography photo → reference (full resolution) used by
+    align_photo_to_ref. Returns (M or None, info dict with match stats).
+    Fewer photo features (nfeatures) for fast, coarser live hints."""
     ph, pw = photo.shape[:2]
-    r_scale = min(max_dim / max(rh, rw), 1.0)
-    p_scale = min(max_dim / max(ph, pw), 1.0)
+    p_scale = min(_ALIGN_MAX_DIM / max(ph, pw), 1.0)
+    pts1, des1, r_scale = ref_sift if ref_sift is not None else reference_sift(ref_img)
 
-    ref_small = cv2.resize(ref_img, None, fx=r_scale, fy=r_scale)
     photo_small = cv2.resize(photo, None, fx=p_scale, fy=p_scale)
-
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    ref_gray = clahe.apply(cv2.cvtColor(ref_small, cv2.COLOR_BGR2GRAY))
     photo_gray = clahe.apply(cv2.cvtColor(photo_small, cv2.COLOR_BGR2GRAY))
 
-    sift = cv2.SIFT_create(nfeatures=5000)
-    kp1, des1 = sift.detectAndCompute(ref_gray, None)
+    sift = cv2.SIFT_create(nfeatures=nfeatures)
     kp2, des2 = sift.detectAndCompute(photo_gray, None)
 
     if des1 is None or des2 is None or len(des1) < 10 or len(des2) < 10:
-        return None
+        return None, {"reason": "not enough features"}
 
-    index_params = dict(algorithm=1, trees=5)
-    search_params = dict(checks=50)
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
-    matches = flann.knnMatch(des1, des2, k=2)
+    matches = flann_knn(des1, des2, k=2)
 
     good = [m for m_pair in matches if len(m_pair) == 2
             for m, n in [m_pair] if m.distance < 0.7 * n.distance]
     if len(good) < 15:
-        return None
+        return None, {"reason": "too few matches", "matches": len(good)}
 
     src_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
-    dst_pts = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+    dst_pts = pts1[[m.queryIdx for m in good]].reshape(-1, 1, 2)
     M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 3.0)
 
     if M is None or mask is None:
-        return None
+        return None, {"reason": "no homography", "matches": len(good)}
     inlier_ratio = mask.sum() / len(mask)
     if inlier_ratio < 0.25:
-        return None
+        return None, {"reason": "low inlier ratio", "matches": len(good),
+                      "inlier_ratio": round(float(inlier_ratio), 3)}
 
     S_src = np.diag([p_scale, p_scale, 1.0])
     S_dst_inv = np.diag([1 / r_scale, 1 / r_scale, 1.0])
     M_full = S_dst_inv @ M @ S_src
-
-    warped = cv2.warpPerspective(photo, M_full, (rw, rh))
-    return warped
+    return M_full, {"matches": len(good),
+                    "inlier_ratio": round(float(inlier_ratio), 3)}
 
 
 @torch.no_grad()
@@ -382,10 +447,7 @@ def _try_global_alignment(ref_img, photo, zone):
         return None
 
     # FLANN matcher — быстрее BF для больших наборов фичей
-    index_params = dict(algorithm=1, trees=5)  # FLANN_INDEX_KDTREE
-    search_params = dict(checks=50)
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
-    matches = flann.knnMatch(des1, des2, k=2)
+    matches = flann_knn(des1, des2, k=2)
 
     good = [m for m_pair in matches if len(m_pair) == 2
             for m, n in [m_pair] if m.distance < 0.7 * n.distance]
@@ -506,11 +568,23 @@ def _try_template_match(zone_crop, photo):
     return crop
 
 
+def defect_preprocess(img: np.ndarray) -> np.ndarray:
+    """CLAHE (LAB L-channel) + blur applied before feature extraction in
+    analyze_defects_nn. Exposed so the reference side can be cached."""
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    clahe = cv2.createCLAHE(clipLimit=cfg.CLAHE_CLIP_LIMIT,
+                            tileGridSize=cfg.CLAHE_TILE_SIZE)
+    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+    norm = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    return cv2.GaussianBlur(norm, cfg.PRE_BLUR_KERNEL, 0)
+
+
 @torch.no_grad()
 def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
                        extract_nn_score: float = 0.0,
                        strict: bool = False,
-                       zone_feats=None, extracted_feats=None) -> dict:
+                       zone_feats=None, extracted_feats=None,
+                       thr=None) -> dict:
     """
     Детекция дефектов через patch-based CNN comparison.
 
@@ -524,41 +598,32 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
       If provided, skips the corresponding forward pass (saves ~50-150ms each).
 
     strict=True: подзоны — жёсткие пороги из SUBZONE_* в inspection_config.py.
+    thr: снимок порогов из cfg.thresholds() (чувствительность запроса).
     """
     m = _model()
+    th = thr if thr is not None else cfg.thresholds()
 
     # Thresholds: обычные vs строгие (подзоны)
-    patch_sim_thr = cfg.SUBZONE_PATCH_SIM_THRESHOLD if strict else cfg.PATCH_SIM_THRESHOLD
-    patch_def_w = cfg.SUBZONE_PATCH_DEFECT_WEIGHT if strict else cfg.PATCH_DEFECT_WEIGHT
-    ok_thr = cfg.SUBZONE_VERDICT_OK_THRESHOLD if strict else cfg.VERDICT_OK_THRESHOLD
-    warn_thr = cfg.SUBZONE_VERDICT_WARN_THRESHOLD if strict else cfg.VERDICT_WARN_THRESHOLD
-    safety_ssim = cfg.SUBZONE_SAFETY_SSIM_LOW if strict else cfg.SAFETY_SSIM_LOW
-    safety_sim = cfg.SUBZONE_SAFETY_SIM_LOW if strict else cfg.SAFETY_SIM_LOW
+    patch_sim_thr = th.SUBZONE_PATCH_SIM_THRESHOLD if strict else th.PATCH_SIM_THRESHOLD
+    patch_def_w = th.SUBZONE_PATCH_DEFECT_WEIGHT if strict else th.PATCH_DEFECT_WEIGHT
+    ok_thr = th.SUBZONE_VERDICT_OK_THRESHOLD if strict else th.VERDICT_OK_THRESHOLD
+    warn_thr = th.SUBZONE_VERDICT_WARN_THRESHOLD if strict else th.VERDICT_WARN_THRESHOLD
+    safety_ssim = th.SUBZONE_SAFETY_SSIM_LOW if strict else th.SAFETY_SSIM_LOW
+    safety_sim = th.SUBZONE_SAFETY_SIM_LOW if strict else th.SAFETY_SIM_LOW
 
     # ─── Предобработка ────────────────────────────────────────────────────
-    z_lab = cv2.cvtColor(zone_crop, cv2.COLOR_BGR2LAB)
-    e_lab = cv2.cvtColor(extracted, cv2.COLOR_BGR2LAB)
-    clahe_pre = cv2.createCLAHE(clipLimit=cfg.CLAHE_CLIP_LIMIT,
-                                tileGridSize=cfg.CLAHE_TILE_SIZE)
-    z_lab[:, :, 0] = clahe_pre.apply(z_lab[:, :, 0])
-    e_lab[:, :, 0] = clahe_pre.apply(e_lab[:, :, 0])
-    z_norm = cv2.cvtColor(z_lab, cv2.COLOR_LAB2BGR)
-    e_norm = cv2.cvtColor(e_lab, cv2.COLOR_LAB2BGR)
-
-    z_blur = cv2.GaussianBlur(z_norm, cfg.PRE_BLUR_KERNEL, 0)
-    e_blur = cv2.GaussianBlur(e_norm, cfg.PRE_BLUR_KERNEL, 0)
+    clahe_pre = cv2.createCLAHE(clipLimit=th.CLAHE_CLIP_LIMIT,
+                                tileGridSize=th.CLAHE_TILE_SIZE)
 
     # Use cached features or compute fresh
     if zone_feats is not None:
         _, z_feats = zone_feats
     else:
-        z_t = _to_tensor(z_blur)
-        _, z_feats = m(z_t)
+        _, z_feats = m(_to_tensor(defect_preprocess(zone_crop)))
     if extracted_feats is not None:
         _, e_feats = extracted_feats
     else:
-        e_t = _to_tensor(e_blur)
-        _, e_feats = m(e_t)
+        _, e_feats = m(_to_tensor(defect_preprocess(extracted)))
 
     # ─── 1. Глобальное сходство ───────────────────────────────────────────
     z_pool = F.adaptive_avg_pool2d(z_feats[7], 1).flatten()
@@ -572,14 +637,14 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
         cv2.resize(zone_crop, sz), cv2.COLOR_BGR2GRAY))
     b_g = clahe_pre.apply(cv2.cvtColor(
         cv2.resize(extracted, sz), cv2.COLOR_BGR2GRAY))
-    a_g = cv2.GaussianBlur(a_g, cfg.SSIM_BLUR_KERNEL, 0)
-    b_g = cv2.GaussianBlur(b_g, cfg.SSIM_BLUR_KERNEL, 0)
+    a_g = cv2.GaussianBlur(a_g, th.SSIM_BLUR_KERNEL, 0)
+    b_g = cv2.GaussianBlur(b_g, th.SSIM_BLUR_KERNEL, 0)
     ssim_val = float(ssim_func(a_g, b_g, data_range=255))
 
     # ─── 3. Patch-based CNN similarity map ────────────────────────────────
     # Сравниваем feature maps на уровне патчей (каждая позиция = ~32x32 px)
-    z_feat = z_feats[cfg.PATCH_LAYER]
-    e_feat = e_feats[cfg.PATCH_LAYER]
+    z_feat = z_feats[th.PATCH_LAYER]
+    e_feat = e_feats[th.PATCH_LAYER]
     z_fn = F.normalize(z_feat, dim=1)
     e_fn = F.normalize(e_feat, dim=1)
     # Cosine similarity на каждой пространственной позиции
@@ -641,22 +706,22 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
 
         # 3) Комбинированный скор подзоны
         #    Если гистограмма или SSIM или global_sim очень низкие → defect
-        if hist_corr < cfg.SUBZONE_HIST_COMPLETELY_DIFF or (
-                ssim_val < cfg.SUBZONE_SSIM_COMPLETELY_DIFF
-                and global_sim < cfg.SUBZONE_SIM_COMPLETELY_DIFF):
+        if hist_corr < th.SUBZONE_HIST_COMPLETELY_DIFF or (
+                ssim_val < th.SUBZONE_SSIM_COMPLETELY_DIFF
+                and global_sim < th.SUBZONE_SIM_COMPLETELY_DIFF):
             # Совершенно разные изображения
-            defect_pct = max(raw_defect, cfg.SUBZONE_FORCED_DEFECT_PCT)
-        elif hist_corr < cfg.SUBZONE_HIST_SIGNIFICANT_DIFF or (
-                ssim_val < cfg.SUBZONE_SSIM_SIGNIFICANT_DIFF
-                and global_sim < cfg.SUBZONE_SIM_SIGNIFICANT_DIFF):
+            defect_pct = max(raw_defect, th.SUBZONE_FORCED_DEFECT_PCT)
+        elif hist_corr < th.SUBZONE_HIST_SIGNIFICANT_DIFF or (
+                ssim_val < th.SUBZONE_SSIM_SIGNIFICANT_DIFF
+                and global_sim < th.SUBZONE_SIM_SIGNIFICANT_DIFF):
             # Значительные различия — минимальный дисконт
-            defect_pct = round(raw_defect * cfg.SUBZONE_DISCOUNT_MINIMAL, 2)
-        elif best_global >= cfg.GLOBAL_SIM_OK:
-            defect_pct = round(raw_defect * cfg.SUBZONE_DISCOUNT_GOOD, 2)
-        elif best_global >= cfg.GLOBAL_SIM_WARN:
-            t = (best_global - cfg.GLOBAL_SIM_WARN) / \
-                max(cfg.GLOBAL_SIM_OK - cfg.GLOBAL_SIM_WARN, 0.01)
-            discount = 1.0 - t * (1.0 - cfg.SUBZONE_DISCOUNT_GOOD)
+            defect_pct = round(raw_defect * th.SUBZONE_DISCOUNT_MINIMAL, 2)
+        elif best_global >= th.GLOBAL_SIM_OK:
+            defect_pct = round(raw_defect * th.SUBZONE_DISCOUNT_GOOD, 2)
+        elif best_global >= th.GLOBAL_SIM_WARN:
+            t = (best_global - th.GLOBAL_SIM_WARN) / \
+                max(th.GLOBAL_SIM_OK - th.GLOBAL_SIM_WARN, 0.01)
+            discount = 1.0 - t * (1.0 - th.SUBZONE_DISCOUNT_GOOD)
             defect_pct = round(raw_defect * discount, 2)
         else:
             defect_pct = round(raw_defect, 2)
@@ -665,12 +730,12 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
         best_global = max(global_sim, extract_nn_score)
 
         ssim_cutoff = getattr(cfg, 'SSIM_DISCOUNT_CUTOFF', 0.42)
-        if best_global >= cfg.GLOBAL_SIM_OK:
-            defect_pct = round(raw_defect * cfg.PATCH_HIGH_SIM_DISCOUNT, 2)
-        elif best_global >= cfg.GLOBAL_SIM_WARN:
-            t = (best_global - cfg.GLOBAL_SIM_WARN) / \
-                max(cfg.GLOBAL_SIM_OK - cfg.GLOBAL_SIM_WARN, 0.01)
-            discount = 1.0 - t * (1.0 - cfg.PATCH_HIGH_SIM_DISCOUNT)
+        if best_global >= th.GLOBAL_SIM_OK:
+            defect_pct = round(raw_defect * th.PATCH_HIGH_SIM_DISCOUNT, 2)
+        elif best_global >= th.GLOBAL_SIM_WARN:
+            t = (best_global - th.GLOBAL_SIM_WARN) / \
+                max(th.GLOBAL_SIM_OK - th.GLOBAL_SIM_WARN, 0.01)
+            discount = 1.0 - t * (1.0 - th.PATCH_HIGH_SIM_DISCOUNT)
             defect_pct = round(raw_defect * discount, 2)
         elif ssim_val < ssim_cutoff:
             defect_pct = round(raw_defect * 0.85, 2)
@@ -707,7 +772,7 @@ def analyze_defects_nn(zone_crop: np.ndarray, extracted: np.ndarray,
     if defect_pct < ok_thr:
         # Safety net: если и global_sim и SSIM очень низкие — не верим OK
         if ssim_val < safety_ssim and global_sim < safety_sim:
-            defect_pct = max(defect_pct, cfg.SAFETY_DEFECT_OVERRIDE_PCT)
+            defect_pct = max(defect_pct, th.SAFETY_DEFECT_OVERRIDE_PCT)
             # verdict = "Дефект ❌ — структурные различия (низкий SSIM/similarity)"
             verdict = "Defect ❌ — structural differences (low SSIM/similarity)"
             status = "defect"

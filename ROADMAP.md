@@ -1,153 +1,98 @@
-# Zone Inspect -- Road Map
+# Zone Inspect — Roadmap
 
-## 1. Quality Gate (pre-inspection photo check)
+State as of 2026-11-27. The earlier plan (March 2026) was written before Recipe
+Studio; most of it is done, in a different shape than planned. This file lists
+what exists, what is next, and what was deliberately postponed.
 
-Before running inspection -- evaluate the incoming photo and warn/reject if quality is low.
+## Done
 
-**Metrics:**
-- **Sharpness** -- Laplacian variance. Blurry phone photo = false defects
-- **Brightness / contrast** -- mean + stddev. Too dark or overexposed = noise
-- **Alignment score** -- homography reprojection error (anchors already exist)
-- **Zone resolution** -- if zone crop < N px after homography, model can't work reliably
+### Recipes and Recipe Studio
+Replaced hand-tuned templates. A recipe is prepared from sample photos and
+published to the line by a lead.
 
-**UX:**
-- Green / yellow / red indicator per photo BEFORE operator makes a decision
-- Yellow = warning (proceed with caution), Red = reject (re-take photo)
+- Recipe versions (draft / active / archived); old templates migrated with their history.
+- Good and defect samples captured from a phone; defect labelling.
+- Publish gates: at least 15 good samples per zone from 2 or more phones,
+  2 defect samples per zone, 1 per critical subzone. A recipe that misses a
+  defect sample is not published unless the miss is explicitly accepted.
+- Photo quality check (sharpness, exposure, resolution) for the reference and for every sample.
+- Operators see published recipes only; strictness comes from the recipe.
 
-**Effort:** ~100 lines backend, minor frontend changes
+### Calibration from samples
+Was "Calibration Mode" in the old plan (phases 1–3 and auto-sensitivity).
 
----
+- A model of normal variation per zone, built from the good samples.
+- OK limit per zone, set from the good samples and checked against the defect samples; presets.
+- Suspect good samples are pointed out.
+- Viewpoint is measured relative to the good samples; a live hint on the phone
+  viewfinder keeps the operator within it.
 
-## 2. Template Health Score
+### Phone inspection
+- A zone is checked as soon as its photo is uploaded; the camera stays open between shots.
+- Barcodes are read on the phone.
 
-When saving/editing a template -- evaluate how "inspectable" it is.
+### Line-system gate
+For a line system (MES) that cannot call the API but can run a program with the
+scanned serial number.
 
-**Per-zone metrics:**
-- **Texture entropy** -- zones with uniform surface (low gradient) give random results
-- **Zone size** -- too large = noise, too small = not enough context
-- **Zone overlap** -- heavily overlapping zones produce correlated results
-- **Reference image quality** -- same sharpness/brightness metrics as Quality Gate
+- `GET /api/v1/verdict?serial=…` — verdict of the latest inspection of a board.
+- `integrations/windows/zi_check.py` — prints the verdict and a link to the
+  result, ends with `EXIT WITH ERRORLEVEL==N`. Python 3.7+, no dependencies.
+- `/r/<result_id>` — a read-only page of one result.
 
-**UX:**
-- Score per zone in template editor
-- Recommendations: "Zone 3: low texture, consider splitting" or "Reference: low sharpness, re-capture"
+### Production
+- Several stations at once: 8 web threads, at most 2 zone checks at a time.
+- Deterministic matching, cached reference features.
+- `run-deploy.sh`: copies only changed tracked files, never deletes, backs up,
+  waits for the health check, can roll back.
 
-**Effort:** moderate, reuses Quality Gate metrics
+## Next
 
----
+| # | Item | Why | Size |
+|---|------|-----|------|
+| 1 | Quality gate on the operator's photo | A blurred handheld shot gives false defects | Small |
+| 2 | Line-system gate: first stations | Proves the integration on real hardware | Small |
+| 3 | Zone health hints in Recipe Studio | Catches zones that cannot be inspected reliably before samples are collected | Medium |
 
-## 3. Calibration Mode
+### 1. Quality gate on the operator's photo
+The quality check already runs for references and samples, but not for the photo
+an operator takes during inspection.
 
-A calibration workflow for existing templates. Lead calibrates before deploying a template to production.
+- Run the same check when an inspection photo is uploaded.
+- Show green / yellow / red on the phone before the verdict; red asks to retake.
+- Decide whether red blocks the check or only warns.
 
-### Phase 1 -- Known Good (golden sample)
+### 2. Line-system gate: first stations
+Deployed, tested against a stub and a test database, not yet run on a station.
 
-Lead takes a **known good board** and photographs it 5-10 times:
-- From different phones
-- With slightly different lighting
-- With small shift/rotation
+- Run on a real station (Windows, Python 3.7); check root certificates there.
+- Confirm that the serial scanned by the line system equals the code Zone Inspect
+  reads from the board. If not, add a normalisation rule (prefix, separators).
+- Results saved by an admin have no group, so a key bound to a group does not
+  see them. Decide whether that is right or whether such results need a group.
 
-System runs inspection on each shot and collects **per-zone statistics:**
-- SSIM mean / std / min / max
-- defect_pct mean / std / min / max
-- Alignment reprojection error
-- Photo sharpness (Laplacian variance)
+### 3. Zone health hints in Recipe Studio
+Was "Template Health Score". Today the only hint is a warning for features
+smaller than 48 px.
 
-**Result: per-zone stability card**
-```
-Zone 1 "IC U5":  stable    sigma=0.02  recommended_threshold=0.35
-Zone 2 "Cap C3": unstable  sigma=0.28  WARNING: high variance
-Zone 3 "Conn":   stable    sigma=0.05  recommended_threshold=0.42
-```
+- Low texture: a zone with a uniform surface gives unstable scores.
+- Heavy overlap between zones.
+- Zone too large or too small for what it contains.
 
-### Phase 2 -- Known Bad (defect sample, optional)
+## Later
 
-Lead takes a board with a **known defect** (or marks with tape/marker). Runs inspection. System checks:
-- Did the model detect the defect in the correct zone?
-- With what score?
-- What margin above threshold?
+### Backbone: EfficientNetV2-S instead of EfficientNet-B4
+Expected to be 30–40% faster on CPU. Postponed: calibration models are built
+from B4 features, so every published recipe would have to be recalibrated and
+re-checked against its defect samples. Worth doing when check time becomes the
+bottleneck, and with a migration plan for existing recipes.
 
-**Result: detection confidence**
-```
-Zone 2 "Cap C3": defect detected, score=0.87, margin=+0.37  OK
-Zone 5 "R12":    defect NOT detected, score=0.41             FAIL
-```
+### Calibration confidence in the API
+Return how well a recipe is calibrated (`calibration_confidence`) with results,
+for line systems that want to weigh a verdict. No request for it so far.
 
-### Phase 3 -- Calibration Report
+## Superseded
 
-Everything saved into the template as a `calibration` object:
-
-```json
-{
-  "calibrated_at": "2026-03-19T...",
-  "calibrated_by": "lead for line1",
-  "good_samples": 8,
-  "bad_samples": 2,
-  "zones": [
-    {
-      "label": "IC U5",
-      "stability": "stable",
-      "sigma": 0.02,
-      "recommended_sensitivity": 0.35,
-      "detection_verified": true,
-      "margin": 0.37
-    }
-  ],
-  "overall_confidence": 0.94
-}
-```
-
-**Template badge in UI:**
-- Green: calibrated, confidence > 0.85
-- Yellow: calibrated, but has unstable zones
-- Red: not calibrated
-- Grey: calibration stale (template changed after calibration)
-
-### What calibration gives:
-
-1. **Lead** understands: "this template is reliable" vs "this zone needs rework"
-2. **Operator** sees: "template is calibrated" -- trust in results
-3. **System** can auto-set optimal sensitivity instead of manual tuning
-4. **v1 API** can return `calibration_confidence` in results for MES integration
-
----
-
-## 4. Backbone upgrade: EfficientNetV2-S
-
-Replace EfficientNet-B4 with EfficientNetV2-S as the feature extraction backbone.
-
-**Why:**
-- Same EfficientNet family -- near drop-in replacement, minimal integration risk
-- Fused-MBConv blocks replace depthwise separable convolutions in early layers -- faster on CPU/GPU/MPS
-- Expected **30-40% speedup** on forward pass with comparable or better feature quality
-- Pretrained weights available in torchvision (`efficientnet_v2_s`)
-- Feature map structure (`.features` sequential blocks) is identical -- same multi-scale extraction approach
-
-**Why not other models:**
-- **MobileNetV4** -- optimized for classification on mobile, spatial feature maps too shallow for patch-level PCB comparison
-- **DINOv2 (ViT-S)** -- best similarity features, but Vision Transformer is slower on CPU/MPS and requires architectural rework
-- **ConvNeXt-Tiny** -- good features but 29M params (heavier) with marginal benefit over V2-S
-
-**What changes:**
-- `_MultiScaleExtractor.__init__`: swap `efficientnet_b4` -> `efficientnet_v2_s`
-- Adjust `LAYERS` indices (V2-S block structure differs slightly)
-- `INPUT_SIZE` may change from 380x380 to 384x384 (V2-S native)
-- Validate: run existing test suite, compare scores on saved references
-
-**Risk:** Low. Same family, same extraction approach. If scores drift -- retune thresholds in `inspection_config.py`.
-
-**Effort:** ~1-2 hours code, + testing on real boards
-
----
-
-## Implementation order
-
-| # | Feature             | Depends on | Priority |
-|---|---------------------|------------|----------|
-| 1 | Quality Gate        | --         | High     |
-| 2 | Template Health     | 1 (reuses) | Medium   |
-| 3 | Calibration Phase 1 | 1, 2       | Medium   |
-| 4 | Calibration Phase 2 | 3          | Low      |
-| 5 | Calibration Report  | 3          | Medium   |
-| 6 | Auto-sensitivity    | 3          | Low      |
-| 7 | Backbone V2-S       | --         | Low      |
+- **Template badge (calibrated / stale / not calibrated)** — replaced by recipe
+  status and publish gates: an uncalibrated recipe cannot reach the line.
+- **Manual sensitivity tuning** — replaced by the OK limit per zone from calibration.

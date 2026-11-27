@@ -33,8 +33,13 @@ from flask import Flask, request, jsonify, render_template, send_file, make_resp
 from skimage.metrics import structural_similarity as ssim
 from auto_blend import auto_blend_images, detect_codes
 import r2_storage as r2
+import recipes as recipes_mod
 
 # ─── MongoDB ──────────────────────────────────────────────────────────────────
+# MongoClient connects lazily and reconnects on its own, so availability is
+# decided by configuration, not by a one-shot check at startup: a transient
+# Atlas/network failure during boot must not leave the app without a DB until
+# the next restart. Requests made during an outage fail; later ones recover.
 try:
     from pymongo import MongoClient
     _MONGO_URI = _os.environ.get("MONGODB_URI", "")
@@ -42,26 +47,40 @@ try:
         _mongo = MongoClient(_MONGO_URI, serverSelectionTimeoutMS=5000)
         _mongo_db = _mongo.get_default_database()
         _results_col = _mongo_db["inspection_results"]
-        _results_col.create_index("timestamp", unique=False)
-        _results_col.create_index("result_id", unique=True)
         _templates_col = _mongo_db["templates"]
-        _templates_col.create_index("id", unique=True)
+        _versions_col = _mongo_db["recipe_versions"]
+        _samples_col = _mongo_db["samples"]
         MONGO_AVAILABLE = True
-        print(f"🍃 MongoDB: connected to {_mongo_db.name}")
+        try:
+            _results_col.create_index("timestamp", unique=False)
+            _results_col.create_index("result_id", unique=True)
+            _templates_col.create_index("id", unique=True)
+            _versions_col.create_index([("recipe_id", 1), ("version", 1)],
+                                       unique=True)
+            _samples_col.create_index("id", unique=True)
+            _samples_col.create_index("recipe_id")
+            print(f"🍃 MongoDB: connected to {_mongo_db.name}", flush=True)
+        except Exception as _e:
+            print(f"⚠️  MongoDB not reachable at startup ({_e}) — "
+                  "will keep retrying on each request", flush=True)
     else:
         MONGO_AVAILABLE = False
         print("⚠️  MONGODB_URI not set — results stored in R2 only")
-except Exception as _e:
+except ImportError:
     MONGO_AVAILABLE = False
-    print(f"⚠️  MongoDB unavailable ({_e}) — results stored in R2 only")
+    print("⚠️  pymongo not installed — results stored in R2 only")
 
 # ─── Neural Engine (optional, graceful fallback to OpenCV) ────────────────────
 try:
     from nn_engine import (match_score_nn, analyze_defects_nn,
                            locate_and_extract_nn, similarity_nn,
                            similarity_nn_batch, similarity_nn_from_feats,
+                           similarity_nn_cached, reference_features,
+                           reference_sift, defect_preprocess,
+                           estimate_homography,
                            extract_features, extract_features_batch,
                            align_photo_to_ref, NN_DEVICE)
+    import calibration as calibration_mod
     NN_AVAILABLE = True
 except ImportError:
     NN_AVAILABLE = False
@@ -110,64 +129,67 @@ else:
 # session_id → { "ref_path": Path, "ref_img": ndarray, "zones": [...], "checked": {...} }
 sessions: dict[str, dict] = {}
 
-# mobile_token → session_id  (shared across gunicorn workers via file)
+# mobile_token → {"sid": session_id, "ts": last_bound}
+# Authoritative copy lives in memory (single gunicorn worker); the file only
+# lets phones survive a service restart without re-scanning the QR code.
 _MOBILE_TOKENS_PATH = BASE_DIR / ".mobile_tokens.json"
 _MOBILE_TOKENS_LOCK = threading.Lock()
+_MOBILE_TOKEN_TTL = 7 * 86400
 
 
-def _load_mobile_tokens() -> dict:
-    """Read tokens from shared file (called on every lookup for multi-worker sync)."""
-    if _MOBILE_TOKENS_PATH.exists():
-        try:
-            with open(_MOBILE_TOKENS_PATH) as f:
-                import fcntl
-                fcntl.flock(f, fcntl.LOCK_SH)
-                data = json.load(f)
-                fcntl.flock(f, fcntl.LOCK_UN)
-                return data
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {}
-
-
-def _save_mobile_tokens(tokens: dict):
-    """Write tokens to shared file with exclusive lock."""
+def _read_mobile_tokens_file() -> dict:
     try:
-        with open(_MOBILE_TOKENS_PATH, "w") as f:
-            import fcntl
-            fcntl.flock(f, fcntl.LOCK_EX)
-            json.dump(tokens, f)
-            fcntl.flock(f, fcntl.LOCK_UN)
+        with open(_MOBILE_TOKENS_PATH) as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    now = time.time()
+    tokens = {}
+    for t, v in raw.items():
+        if isinstance(v, str):  # legacy format: token → sid
+            v = {"sid": v, "ts": now}
+        if isinstance(v, dict) and (v.get("sid") or v.get("recipe")):
+            tokens[t] = v
+    return tokens
+
+
+_mobile_tokens: dict[str, dict] = _read_mobile_tokens_file()
+
+
+def _persist_mobile_tokens():
+    """Write tokens atomically (tmp + rename). Caller holds the lock."""
+    now = time.time()
+    for t in [t for t, v in _mobile_tokens.items()
+              if now - v.get("ts", 0) > _MOBILE_TOKEN_TTL]:
+        del _mobile_tokens[t]
+    tmp = _MOBILE_TOKENS_PATH.with_suffix(".tmp")
+    try:
+        with open(tmp, "w") as f:
+            json.dump(_mobile_tokens, f)
+        _os.replace(tmp, _MOBILE_TOKENS_PATH)
     except OSError:
         pass
 
 
 def _get_token_session(token: str) -> str | None:
-    """Get session_id for a mobile token (reads from shared file)."""
-    return _load_mobile_tokens().get(token)
+    """Get session_id for a mobile token."""
+    entry = _mobile_tokens.get(token)
+    return entry.get("sid") if entry else None
 
 
-def _set_token_session(token: str, sid: str):
-    """Set or update a mobile token → session mapping."""
-    with _MOBILE_TOKENS_LOCK:
-        tokens = _load_mobile_tokens()
-        tokens[token] = sid
-        _save_mobile_tokens(tokens)
-
-
-def _remove_tokens_for_session(sid: str):
-    """Remove all mobile tokens pointing to a given session."""
-    with _MOBILE_TOKENS_LOCK:
-        tokens = _load_mobile_tokens()
-        tokens = {t: s for t, s in tokens.items() if s != sid}
-        _save_mobile_tokens(tokens)
+def _bind_token(token: str, sid: str):
+    """Point a mobile token at a session. Caller holds the lock."""
+    _mobile_tokens[token] = {"sid": sid, "ts": time.time()}
+    _persist_mobile_tokens()
 
 
 # session_id → list of uploaded photo blobs (bytes) from mobile
-mobile_photos: dict[str, list[bytes]] = {}
+mobile_photos: dict[str, list[dict]] = {}   # sid → check results of phone photos, not yet shown on the desktop
 
 # Thread pool for background R2 uploads (non-blocking save)
 _r2_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="r2")
+# r2.append_line is download + append + upload: serialize to not lose lines
+_r2_append_lock = threading.Lock()
 
 # ─── Session TTL cleanup (60 min) ────────────────────────────────────────────
 SESSION_TTL = 1800  # seconds (30 min)
@@ -191,8 +213,8 @@ def _cleanup_sessions():
             sessions.pop(sid, None)
             # Clean mobile photos for this session
             mobile_photos.pop(sid, None)
-            # Remove mobile tokens pointing to this session
-            _remove_tokens_for_session(sid)
+            # Mobile tokens are kept (they expire by TTL): the desktop can
+            # rebind its token to a fresh session so the phone keeps working.
         if expired:
             gc.collect()
             if _malloc_trim:
@@ -227,11 +249,22 @@ AUTH_COOKIE = "pcb_auth_key"
 AUTH_COOKIE_MAX_AGE = 30 * 86400  # 30 days
 
 # ─── Brute-force protection ──────────────────────────────────────────────────
-_LOGIN_MAX_ATTEMPTS = 5       # per window
+# Keys are ~95-bit random strings, so this only throttles noise. Kept mild:
+# a factory floor often shares one public IP, and a lockout hits every station.
+_LOGIN_MAX_ATTEMPTS = 10      # per window
 _LOGIN_WINDOW = 60            # seconds
-_LOGIN_LOCKOUT = 300          # seconds after exceeding limit
+_LOGIN_LOCKOUT = 120          # seconds after exceeding limit
 _login_attempts: dict[str, list[float]] = {}  # ip -> [timestamps]
 _login_lockouts: dict[str, float] = {}        # ip -> lockout_until
+
+
+def _client_ip() -> str:
+    """Real client IP. Behind the local nginx, trust its X-Real-IP (nginx
+    resolves the Cloudflare CF-Connecting-IP via the realip module)."""
+    addr = request.remote_addr or "unknown"
+    if addr in ("127.0.0.1", "::1"):
+        return request.headers.get("X-Real-IP", addr)
+    return addr
 
 
 def _load_auth_keys() -> dict:
@@ -271,7 +304,7 @@ def _check_auth():
 
 # Routes that don't require auth
 _PUBLIC_PREFIXES = ("/login", "/static/", "/api/mobile/",
-                    "/mobile", "/doc", "/license",
+                    "/mobile", "/doc", "/license", "/healthz",
                     "/robots.txt", "/sitemap.xml")
 
 
@@ -325,6 +358,9 @@ def _require_auth():
         # API calls get 401 JSON, browsers get redirect
         if request.path.startswith("/api/"):
             return jsonify({"error": "Unauthorized"}), 401
+        if path.startswith("/r/"):       # come back to the result after login
+            from urllib.parse import quote
+            return redirect("/login?next=" + quote(path, safe="/"))
         return redirect("/login")
     # Tag request with user
     request.auth_user = user
@@ -358,7 +394,7 @@ def login_page():
 
 @app.route("/login", methods=["POST"])
 def login_submit():
-    ip = request.remote_addr or "unknown"
+    ip = _client_ip()
     now = time.time()
 
     # Check lockout
@@ -398,6 +434,25 @@ def logout():
     resp = redirect("/login")
     resp.delete_cookie(AUTH_COOKIE)
     return resp
+
+
+@app.route("/healthz")
+def healthz():
+    """Liveness + dependency check for external uptime monitoring.
+    503 when a configured dependency is down (e.g. MongoDB unreachable)."""
+    checks = {"nn": NN_AVAILABLE}
+    healthy = True
+    if _os.environ.get("MONGODB_URI"):
+        try:
+            _mongo.admin.command("ping")
+            checks["mongo"] = "ok"
+        except Exception:
+            checks["mongo"] = "down"
+            healthy = False
+    else:
+        checks["mongo"] = "not configured"
+    return jsonify({"status": "ok" if healthy else "degraded",
+                    **checks}), 200 if healthy else 503
 
 
 @app.route("/doc")
@@ -660,6 +715,7 @@ def _try_global_align_full(ref_img, photo):
 
     index_params = dict(algorithm=1, trees=5)
     search_params = dict(checks=50)
+    cv2.setRNGSeed(0)  # deterministic kd-trees (see nn_engine.flann_knn)
     flann = cv2.FlannBasedMatcher(index_params, search_params)
     matches = flann.knnMatch(des2, des1, k=2)
     good = [m for m_pair in matches if len(m_pair) == 2
@@ -758,17 +814,20 @@ def _locate_and_extract(zone_crop: np.ndarray, photo: np.ndarray,
 def _analyze_defects(zone_crop: np.ndarray, extracted: np.ndarray,
                      extract_nn_score: float = 0.0,
                      strict: bool = False,
-                     zone_feats=None, extracted_feats=None) -> dict:
+                     zone_feats=None, extracted_feats=None,
+                     thr=None) -> dict:
     """
     Детекция дефектов: структурное сравнение при наличии neural engine,
     иначе classical (CLAHE + SSIM + edge diff).
     strict=True: подзоны — жёсткие пороги.
+    thr: снимок порогов inspection_config.thresholds() для этого запроса.
     """
     if NN_AVAILABLE:
         return analyze_defects_nn(zone_crop, extracted, extract_nn_score,
                                   strict=strict,
                                   zone_feats=zone_feats,
-                                  extracted_feats=extracted_feats)
+                                  extracted_feats=extracted_feats,
+                                  thr=thr)
 
     # ── OpenCV fallback ──────────────────────────────────────────────────
     size = (256, 256)
@@ -896,6 +955,11 @@ def index():
 @app.route("/api/auto_blend", methods=["POST"])
 def api_auto_blend():
     """Принять несколько изображений, автоматически выровнять и усреднить."""
+    # Ad-hoc references/zones are recipe authoring: lead/admin only.
+    # Operators inspect with published recipes (load_template).
+    err = _require_lead_or_admin()
+    if err:
+        return err
     files = request.files.getlist("images")
     if len(files) < 2:
         return jsonify({"error": "At least 2 images required"}), 400
@@ -927,6 +991,11 @@ def api_auto_blend():
 @app.route("/api/session", methods=["POST"])
 def create_session():
     """Шаг 1: Загрузить изображение платы (одно или склеенное на клиенте) → session_id."""
+    # Ad-hoc references/zones are recipe authoring: lead/admin only.
+    # Operators inspect with published recipes (load_template).
+    err = _require_lead_or_admin()
+    if err:
+        return err
     # Accept 'image' (single/stitched) or 'images' (multi, backward compat)
     file = request.files.get("image")
     if not file:
@@ -963,6 +1032,11 @@ def create_session():
 @app.route("/api/session/<sid>/zones", methods=["POST"])
 def set_zones(sid):
     """Шаг 2: Задать зоны контроля. Body: { zones: [{x,y,w,h,label},...] } — нормализованные 0..1."""
+    # Ad-hoc references/zones are recipe authoring: lead/admin only.
+    # Operators inspect with published recipes (load_template).
+    err = _require_lead_or_admin()
+    if err:
+        return err
     if sid not in sessions:
         return jsonify({"error": "Session not found"}), 404
 
@@ -1051,13 +1125,189 @@ def check_zone(sid):
     """Шаг 3: Загрузить фото зоны → система ищет, какой зоне оно соответствует."""
     import traceback
     try:
-        return _check_zone_impl(sid)
+        with _check_slots:
+            return _check_zone_impl(sid)
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": f"Internal error: {e}"}), 500
 
 
-def _check_zone_impl(sid, photo_img=None):
+def _ref_cache(s: dict) -> dict:
+    """Per-session cache of reference-side features. The reference image and
+    zones are constant between photos, so their SIFT / CNN features are
+    computed once instead of on every check. Reset when zones change."""
+    key = json.dumps(s["zones"], sort_keys=True, default=str)
+    c = s.get("_ref_cache")
+    if c is None or c["key"] != key:
+        c = s["_ref_cache"] = {"key": key, "zone": {}, "zone_pre": {},
+                               "sub": {}}
+    return c
+
+
+def _cached_ref_feats(store: dict, crops: dict, preprocess=None) -> list:
+    """Features for crops {key: image}, computing only the missing ones
+    (in one batch). Returns them in crops' order."""
+    missing = [k for k in crops if k not in store]
+    if missing:
+        feats = reference_features([crops[k] for k in missing], preprocess)
+        store.update(zip(missing, feats))
+    return [store[k] for k in crops]
+
+
+_calib_models: dict[tuple, dict] = {}   # (recipe id, version) → {zone: ZoneModel}
+_calib_models_lock = threading.Lock()
+
+
+def _zone_models(s: dict) -> dict:
+    key = (s.get("template_id"), s.get("template_version"))
+    with _calib_models_lock:
+        hit = _calib_models.get(key)
+    if hit is not None:
+        return hit
+    ref_wh = (s["ref_img"].shape[1], s["ref_img"].shape[0])
+    models = {}
+    for zc in s["calibration"]["zones"]:
+        data = r2.download_bytes(zc["bank_key"])
+        if data:
+            models[zc["zone"]] = calibration_mod.ZoneModel(s["zones"][zc["zone"]], ref_wh, zc, data)
+    with _calib_models_lock:
+        if len(_calib_models) > 8:
+            _calib_models.clear()
+        _calib_models[key] = models
+    return models
+
+
+def _vis_calibrated(crop, nmap, t_ok, t_def, size=(256, 256)):
+    """Heatmap and outlined-deviation images in the legacy result format."""
+    base = cv2.resize(crop, size)
+    norm = np.clip(nmap / max(t_def, 1e-6), 0, 1.5) / 1.5
+    hm = cv2.applyColorMap((norm * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    hm = cv2.resize(hm, size, interpolation=cv2.INTER_LINEAR)
+    heat = cv2.addWeighted(base, 0.55, hm, 0.45, 0)
+    mask = cv2.resize((nmap > t_ok).astype(np.uint8) * 255, size, interpolation=cv2.INTER_NEAREST)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    out = base.copy()
+    if contours:
+        red = np.zeros_like(out)
+        red[:, :, 2] = mask
+        out = cv2.addWeighted(out, 1.0, red, 0.35, 0)
+        cv2.drawContours(out, contours, -1, (0, 0, 255), 2)
+    return nn_b64(out), nn_b64(heat), len(contours)
+
+
+def nn_b64(img):
+    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    return base64.b64encode(buf.tobytes()).decode()
+
+
+def _check_zone_calibrated(s: dict, photo, from_mobile: bool, photo_path):
+    """Inspection with the recipe's model of normal variation. The zone is
+    found by geometry (homography + coverage); the response has the same
+    shape as the reference-comparison path, so the screens are unchanged."""
+    ref_img, zones = s["ref_img"], s["zones"]
+    if s.get("_ref_sift") is None:
+        s["_ref_sift"] = reference_sift(ref_img)
+    H, _info = estimate_homography(ref_img, photo, ref_sift=s["_ref_sift"])
+    if from_mobile:
+        photo_b64 = base64.b64encode(cv2.imencode(".jpg", photo)[1].tobytes()).decode()
+    else:
+        photo_b64 = _file_to_b64(photo_path)
+    models = _zone_models(s)
+    shares = [0.0] * len(zones)
+    if H is not None:
+        for zi, m in models.items():
+            _, shares[zi] = m.geom.coverage(photo.shape, H)
+    ok_zones = {i for i, info in s["checked"].items()
+                if (info.get("defect_info") or {}).get("status") == "ok"}
+    cands = [zi for zi in models if shares[zi] >= calibration_mod.ZONE_COVERAGE_MIN]
+    cands.sort(key=lambda zi: (zi in ok_zones, -shares[zi]))
+    res = models[cands[0]].inspect(photo, H) if cands else None
+    best = cands[0] if cands else (int(np.argmax(shares)) if shares else 0)
+    result = {
+        "matched": res is not None,
+        "best_zone_index": best,
+        "best_zone_label": zones[best]["label"] if zones else "",
+        "best_score": round(shares[best], 4) if shares else 0.0,
+        "all_scores": [round(x, 4) for x in shares],
+        "photo_b64": photo_b64,
+        "mode": "calibrated",
+    }
+    if res is not None:
+        verdict = {"ok": "OK ✅ — within the normal variation of the good samples",
+                   "warn": "Warning ⚠️ — unusual area, check it",
+                   "defect": "Defect ❌ — outside the normal variation"}[res["status"]]
+        view_dev = res.get("view_dev")
+        off_angle = view_dev is not None and view_dev > calibration_mod.VIEW_DEVIATION_MAX
+        result["view_dev"] = view_dev
+        vis_def, vis_heat, n_regions = _vis_calibrated(res["crop"], res["map"], res["t_ok"], res["t_def"])
+        sub_results = []
+        gh, gw = res["map"].shape
+        for sr, (ys, xs) in zip(res["subzones"], models[best].geom.subzone_slices()):
+            sz = zones[best]["subzones"][sr["index"]]
+            ch, cw = res["crop"].shape[:2]
+            sub_crop = res["crop"][int(sz["y"] * ch):int((sz["y"] + sz["h"]) * ch) or 1,
+                                   int(sz["x"] * cw):int((sz["x"] + sz["w"]) * cw) or 1]
+            sd, shm, _ = _vis_calibrated(sub_crop, res["map"][ys, xs], sr["t_ok"], sr["t_def"])
+            ref_crop = _crop_zone(_crop_zone(ref_img, zones[best]), sz)
+            sub_results.append({
+                "index": sr["index"], "label": sr["label"], "sensitivity": None,
+                "status": sr["status"],
+                "verdict": f"{sr['status'].upper()} — score {sr['score']:.2f} (limit {sr['t_ok']:.2f})",
+                "defect_pct": round(100.0 * float((res["map"][ys, xs] > sr["t_ok"]).mean()), 2),
+                "ssim": round(sr["score"], 3),
+                "vis_defects_b64": sd, "vis_heatmap_b64": shm,
+                "extracted_b64": nn_b64(cv2.resize(sub_crop, (256, 256))),
+                "reference_b64": nn_b64(cv2.resize(ref_crop, (256, 256))) if ref_crop.size else "",
+                "anomaly": {"score": sr["score"], "t_ok": sr["t_ok"], "t_def": sr["t_def"]},
+            })
+        status = res["status"]
+        rank = {"ok": 0, "warn": 1, "defect": 2}
+        for sr in sub_results:
+            if rank[sr["status"]] > rank[status]:
+                status = sr["status"]
+                verdict = f"{verdict} (subzone: {sr['label']})"
+        if off_angle and status != "ok":
+            verdict += (f" · photo taken from an unusual angle ({view_dev:.0f}° from the recipe's samples)"
+                        " — retake it the usual way")
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        s["checked"][best] = {
+            "score": result["best_score"], "photo_b64": photo_b64,
+            "checked_at": _dt.now(_tz(_td(hours=8))).strftime("%Y-%m-%dT%H:%M:%S.%f"),
+            "operator": _check_auth() or s.get("operator", ""),
+            "zone_sensitivity": None, "subzone_sensitivity": None,
+            "defect_info": {"status": status, "defect_pct": res["area_pct"], "verdict": verdict},
+            "subzone_results": sub_results,
+            "anomaly": {"score": res["score"], "t_ok": res["t_ok"], "t_def": res["t_def"],
+                        "mode": "calibrated"},
+        }
+        result["defect"] = {
+            "status": status, "verdict": verdict,
+            "ssim": round(res["score"], 3), "defect_pct": res["area_pct"],
+            "defect_count": n_regions,
+            "vis_defects_b64": vis_def, "vis_heatmap_b64": vis_heat,
+            "extracted_b64": nn_b64(cv2.resize(res["crop"], (256, 256))),
+            "zone_sensitivity": None, "subzone_sensitivity": None,
+            "anomaly": {"score": res["score"], "t_ok": res["t_ok"], "t_def": res["t_def"]},
+        }
+        if sub_results:
+            result["defect"]["subzones"] = sub_results
+    total = len(zones)
+    done = len(s["checked"])
+    result["progress"] = {"done": done, "total": total, "complete": done >= total}
+    result["checked_zones"] = list(s["checked"].keys())
+    return jsonify(result)
+
+
+# Zone checks are CPU-bound (SIFT + CNN, each using several cores): running
+# more than about one per physical core at a time only makes all of them
+# slower. Extra requests wait here; the web threads stay free for the light
+# requests (polling, serial, hints). Load test, 8 stations: p90 2.65 s with 4
+# threads and no limit, 3.82 s with 8 threads and no limit.
+CHECK_CONCURRENCY = int(_os.environ.get("CHECK_CONCURRENCY", "2"))
+_check_slots = threading.BoundedSemaphore(CHECK_CONCURRENCY)
+
+
+def _check_zone_impl(sid, photo_img=None, sens_override=None):
     if sid not in sessions:
         return jsonify({"error": "Session not found"}), 404
 
@@ -1066,31 +1316,38 @@ def _check_zone_impl(sid, photo_img=None):
     if not s["zones"]:
         return jsonify({"error": "Zones not defined"}), 400
 
-    # ─── Sensitivity overrides from frontend ──────────────────────────────
+    # ─── Sensitivity ───────────────────────────────────────────────────────
+    # Strictness belongs to the recipe. Values sent by the client are only
+    # honoured from lead/admin (trial runs, ad-hoc sessions); operators always
+    # inspect with the recipe's settings.
+    # Thresholds are computed per request (never written to the shared
+    # inspection_config module — requests run concurrently in threads).
     import inspection_config as _cfg
-    zone_sens = None
-    subzone_sens = None
-    # Try form data first (desktop upload), then query args (mobile path)
-    try:
-        zs = request.form.get("zone_sensitivity") or request.args.get(
-            "zone_sensitivity")
-        if zs is not None:
-            zone_sens = max(0.0, min(2.0, float(zs)))
-            _cfg.apply_zone_sensitivity(zone_sens)
-    except (ValueError, TypeError):
-        pass
-    try:
-        ss = request.form.get("subzone_sensitivity") or request.args.get(
-            "subzone_sensitivity")
-        if ss is not None:
-            subzone_sens = max(0.0, min(2.0, float(ss)))
-            _cfg.apply_subzone_sensitivity(subzone_sens)
-    except (ValueError, TypeError):
-        pass
+    zone_sens = s.get("zone_sensitivity")
+    subzone_sens = s.get("subzone_sensitivity")
+    if sens_override:     # set by a lead/admin desktop for photos from its phone
+        zone_sens, subzone_sens = sens_override
+    if getattr(request, "auth_role", "") in ("admin", "lead"):
+        # Form data first (desktop upload), then query args (mobile path)
+        try:
+            zs = request.form.get("zone_sensitivity") or request.args.get(
+                "zone_sensitivity")
+            if zs is not None:
+                zone_sens = max(0.0, min(2.0, float(zs)))
+        except (ValueError, TypeError):
+            pass
+        try:
+            ss = request.form.get("subzone_sensitivity") or request.args.get(
+                "subzone_sensitivity")
+            if ss is not None:
+                subzone_sens = max(0.0, min(2.0, float(ss)))
+        except (ValueError, TypeError):
+            pass
     if zone_sens is None:
         zone_sens = _cfg.ZONE_SENSITIVITY
     if subzone_sens is None:
         subzone_sens = _cfg.SUBZONE_SENSITIVITY
+    thr = _cfg.thresholds(zone_sens, subzone_sens)
 
     if photo_img is not None:
         photo = photo_img
@@ -1107,6 +1364,10 @@ def _check_zone_impl(sid, photo_img=None):
         if photo is None:
             return jsonify({"error": "Failed to open photo"}), 400
 
+    if s.get("calibration") and NN_AVAILABLE:
+        return _check_zone_calibrated(s, photo, photo_img is not None,
+                                      None if photo_img is not None else photo_path)
+
     ref_img = s["ref_img"]
     zones = s["zones"]
 
@@ -1122,7 +1383,9 @@ def _check_zone_impl(sid, photo_img=None):
     # STEP 1: Global alignment ONCE
     warped = None
     if NN_AVAILABLE:
-        warped = align_photo_to_ref(ref_img, photo)
+        if s.get("_ref_sift") is None:
+            s["_ref_sift"] = reference_sift(ref_img)
+        warped = align_photo_to_ref(ref_img, photo, ref_sift=s["_ref_sift"])
     else:
         warped = _try_global_align_full(ref_img, photo)
 
@@ -1151,9 +1414,18 @@ def _check_zone_impl(sid, photo_img=None):
                     extracted = cv2.resize(raw, (zw, zh))
                     method = "global_homography"
 
+        if extracted is None and warped is None:
+            # Slow fallback: per-zone localization — only when global
+            # alignment failed. With a valid homography a black crop just
+            # means "this zone is outside the photo"; searching for it
+            # anyway cost ~1 s per zone and never produced a winning match.
+            # ref_img/zone are not passed: global alignment was already
+            # tried (identically) in step 1.
+            extracted, method = _locate_and_extract(crop, photo)
         if extracted is None:
-            # Slow fallback: per-zone localization
-            extracted, method = _locate_and_extract(crop, photo, ref_img, z)
+            candidates.append({"idx": i, "ssim_quick": 0.0,
+                              "extracted": None, "method": None})
+            continue
 
         # Quick SSIM for ranking (near-instant)
         a_g = cv2.cvtColor(cv2.resize(crop, (128, 128)), cv2.COLOR_BGR2GRAY)
@@ -1170,14 +1442,15 @@ def _check_zone_impl(sid, photo_img=None):
 
     TOP_N = min(3, len(valid))
     top_candidates = valid[:TOP_N]
+    rc = _ref_cache(s) if NN_AVAILABLE else None
     if NN_AVAILABLE and top_candidates:
-        # Batch inference: one forward pass for all top pairs
-        pairs = []
+        # One forward pass for the photo crops; reference side from cache
+        crops = {}
         for c in top_candidates:
-            crop = _crop_zone(ref_img, zones[c["idx"]])
-            c["_crop"] = crop
-            pairs.append((crop, c["extracted"]))
-        batch_scores = similarity_nn_batch(pairs)
+            c["_crop"] = crops[c["idx"]] = _crop_zone(ref_img, zones[c["idx"]])
+        batch_scores = similarity_nn_cached(
+            _cached_ref_feats(rc["zone"], crops),
+            [c["extracted"] for c in top_candidates])
         for c, sc in zip(top_candidates, batch_scores):
             c["score"] = sc
     else:
@@ -1236,24 +1509,23 @@ def _check_zone_impl(sid, photo_img=None):
             sz_pairs.append((szi, sz, sz_ref, sz_ext))
 
         if NN_AVAILABLE and sz_pairs:
-            # Batch: extract features for all subzone refs + extracteds at once
-            all_imgs = []
-            for _, _, sz_ref, sz_ext in sz_pairs:
-                all_imgs.append(sz_ref)
-                all_imgs.append(sz_ext)
-            all_feats = extract_features_batch(all_imgs)
+            # Batch: features for all subzone crops of the photo at once;
+            # reference subzone features from the session cache
+            ref_feats = _cached_ref_feats(
+                rc["sub"], {(best["idx"], szi): sz_ref
+                            for szi, _, sz_ref, _ in sz_pairs})
+            ext_feats = extract_features_batch(
+                [sz_ext for _, _, _, sz_ext in sz_pairs])
             for pi, (szi, sz, sz_ref, sz_ext) in enumerate(sz_pairs):
                 # Per-subzone sensitivity override
                 _sz_sens = sz.get("sensitivity")
-                if _sz_sens is not None:
-                    _cfg.apply_subzone_sensitivity(_sz_sens)
-                zf = all_feats[pi * 2]
-                ef = all_feats[pi * 2 + 1]
+                sz_thr = (_cfg.thresholds(zone_sens, _sz_sens)
+                          if _sz_sens is not None else thr)
+                zf = ref_feats[pi]
+                ef = ext_feats[pi]
                 sz_defect = _analyze_defects(
                     sz_ref, sz_ext, best_score, strict=True,
-                    zone_feats=zf, extracted_feats=ef)
-                if _sz_sens is not None:
-                    _cfg.apply_subzone_sensitivity(subzone_sens)
+                    zone_feats=zf, extracted_feats=ef, thr=sz_thr)
                 subzone_results.append({
                     "index": szi,
                     "label": sz.get("label", f"Subzone {szi + 1}"),
@@ -1271,12 +1543,10 @@ def _check_zone_impl(sid, photo_img=None):
             for szi, sz, sz_ref, sz_ext in sz_pairs:
                 # Per-subzone sensitivity override
                 _sz_sens = sz.get("sensitivity")
-                if _sz_sens is not None:
-                    _cfg.apply_subzone_sensitivity(_sz_sens)
+                sz_thr = (_cfg.thresholds(zone_sens, _sz_sens)
+                          if _sz_sens is not None else thr)
                 sz_defect = _analyze_defects(sz_ref, sz_ext, best_score,
-                                             strict=True)
-                if _sz_sens is not None:
-                    _cfg.apply_subzone_sensitivity(subzone_sens)
+                                             strict=True, thr=sz_thr)
                 subzone_results.append({
                     "index": szi,
                     "label": sz.get("label", f"Subzone {szi + 1}"),
@@ -1291,7 +1561,13 @@ def _check_zone_impl(sid, photo_img=None):
                     "reference_b64": sz_defect["reference_b64"],
                 })
 
-        defect_info = _analyze_defects(best_crop, extracted, best_score)
+        zone_feats = None
+        if NN_AVAILABLE:
+            zone_feats = _cached_ref_feats(
+                rc["zone_pre"], {best["idx"]: best_crop},
+                preprocess=defect_preprocess)[0]
+        defect_info = _analyze_defects(best_crop, extracted, best_score,
+                                       zone_feats=zone_feats, thr=thr)
 
         # Итоговый статус зоны = худший из (зона, подзоны)
         if subzone_results:
@@ -1430,7 +1706,9 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
     from datetime import datetime, timezone, timedelta
     _tz8 = timezone(timedelta(hours=8))
     ts = datetime.now(_tz8)
-    rid = sid[:8] + "_" + ts.strftime("%H%M%S")
+    # Date + random suffix: a long-lived session must never produce the same
+    # id twice (a repeat would overwrite an earlier board's record + images).
+    rid = f"{sid[:8]}_{ts:%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:4]}"
     prefix = f"results/{rid}/"
 
     record = {
@@ -1439,6 +1717,7 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
         "session_id": sid,
         "template_id": s.get("template_id", ""),
         "template_name": s.get("template_name", ""),
+        "recipe_version": s.get("template_version"),
         "barcode_mask": s.get("barcode_mask", ""),
         "serial": s.get("serial", ""),
         "serial_type": s.get("serial_type", ""),
@@ -1464,6 +1743,8 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
             "zone_sensitivity": info.get("zone_sensitivity"),
             "subzone_sensitivity": info.get("subzone_sensitivity"),
         }
+        if info.get("anomaly"):
+            zone_rec["anomaly"] = info["anomaly"]
         # User decision override
         if i in user_decisions:
             zone_rec["user_decision"] = user_decisions[i]
@@ -1548,8 +1829,7 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
 
     # Save metadata: MongoDB (primary) with R2 fallback
     if MONGO_AVAILABLE:
-        _results_col.replace_one(
-            {"result_id": rid}, record, upsert=True)
+        _results_col.insert_one(dict(record))  # copy: insert_one adds _id
     else:
         r2.upload_json(prefix + "meta.json", record)
 
@@ -1562,12 +1842,13 @@ def _save_inspection_record(s, sid, user_decisions=None, user_sub_decisions=None
     def _do_upload(path, data, ct):
         try:
             if ct is None:
-                r2.append_line(path, data.decode())
+                with _r2_append_lock:
+                    r2.append_line(path, data.decode())
             else:
                 r2.upload_bytes(path, data, ct)
         except Exception:
             import logging
-            logging.getLogger(__name__).warning("R2 upload failed: %s", path)
+            logging.getLogger(__name__).exception("R2 upload failed: %s", path)
     for u in _uploads:
         _r2_pool.submit(_do_upload, *u)
 
@@ -1619,7 +1900,9 @@ def update_result(sid):
     if not MONGO_AVAILABLE:
         return jsonify({"error": "MongoDB unavailable"}), 503
 
-    existing = _results_col.find_one({"result_id": rid})
+    q = {"result_id": rid}
+    q.update(_group_filter())
+    existing = _results_col.find_one(q)
     if not existing:
         return jsonify({"error": "Record not found"}), 404
 
@@ -1676,11 +1959,35 @@ def update_result(sid):
         elif eff == "warn" and overall == "ok":
             overall = "warn"
 
-    _results_col.update_one({"result_id": rid}, {"$set": {
-        "zones": zones,
-        "overall_status": overall,
-    }})
+    from datetime import datetime, timezone
+    _results_col.update_one({"result_id": rid}, {
+        "$set": {"zones": zones, "overall_status": overall},
+        "$push": {"decision_log": {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "by": getattr(request, "auth_user", ""),
+            "previous_overall": existing.get("overall_status"),
+            "overall": overall,
+            "user_decisions": {str(k): v for k, v in user_decisions.items()},
+            "user_sub_decisions": {
+                str(z): {str(k): v for k, v in subs.items()}
+                for z, subs in user_sub_decisions.items()},
+        }},
+    })
     return jsonify({"status": "ok", "overall": overall, "result_id": rid})
+
+
+def _result_visible(rid: str) -> bool:
+    """May the current user or API key see this saved result? Images are
+    stored by result id, so the image routes ask this before serving one."""
+    grp_f = _group_filter()
+    if not grp_f:                      # admin, or an API key without a group
+        return True
+    if MONGO_AVAILABLE:
+        q = {"result_id": rid}
+        q.update(grp_f)
+        return _results_col.find_one(q, {"_id": 1}) is not None
+    meta = r2.download_json(f"results/{rid}/meta.json") or {}
+    return meta.get("group") == grp_f.get("group")
 
 
 # ─── External API v1 (read-only, for integrations) ───────────────────────────
@@ -1795,10 +2102,156 @@ def api_v1_result_image(rid, fname):
     if (not re.match(r'^[a-zA-Z0-9_\-]+$', rid)
             or not re.match(r'^[a-zA-Z0-9_\-]+\.jpg$', fname)):
         return jsonify({"error": "invalid"}), 400
+    if not _result_visible(rid):       # same answer as for a missing image
+        return jsonify({"error": "not found"}), 404
     data = r2.download_bytes(f"results/{rid}/{fname}")
     if not data:
         return jsonify({"error": "not found"}), 404
     return send_file(io.BytesIO(data), mimetype="image/jpeg")
+
+
+# ─── Verdict by serial number (for a line system that cannot call us back) ───
+# The line system runs a small script with the scanned serial at the end of an
+# operation (integrations/windows/zi_check.py); the script asks for the verdict
+# of the latest inspection of that board and turns it into an exit code.
+
+def _zone_effective_status(z: dict) -> str:
+    """ok | warn | defect | unchecked — same precedence as when a result is
+    saved: operator's zone decision > worst subzone > calculated zone status."""
+    if z.get("user_decision"):
+        return z["user_decision"]
+    subs = z.get("subzones") or []
+    if subs:
+        rank = {"ok": 0, "warn": 1, "defect": 2}
+        worst = max(rank.get(sz.get("user_decision") or sz.get("status"), 0)
+                    for sz in subs)
+        return ("ok", "warn", "defect")[worst]
+    return z.get("status") or "unchecked"
+
+
+def _verdict_from_record(doc: dict) -> dict:
+    """Pass only when every zone of the recipe was checked and is OK.
+    reason: ok | defect | incomplete | warn (the first that applies)."""
+    zones = doc.get("zones") or []
+    problems = []
+    for z in zones:
+        st = _zone_effective_status(z)
+        if st != "ok":
+            problems.append({"label": z.get("label", ""), "status": st})
+    statuses = {p["status"] for p in problems}
+    overall = doc.get("overall_status")
+    total = doc.get("zones_total", len(zones))
+    checked = doc.get("zones_checked", len(zones))
+    if "defect" in statuses or overall == "defect":
+        reason = "defect"
+    elif not zones or "unchecked" in statuses or checked < total:
+        reason = "incomplete"
+    elif "warn" in statuses or overall == "warn":
+        reason = "warn"
+    elif problems or overall != "ok":
+        reason = "incomplete"          # unknown status: never report a pass
+    else:
+        reason = "ok"
+    return {"verdict": "pass" if reason == "ok" else "fail",
+            "reason": reason, "problem_zones": problems,
+            "zones_total": total, "zones_checked": checked}
+
+
+def _public_base_url() -> str:
+    configured = app.config.get("BASE_URL", "")
+    if configured:
+        return configured.rstrip("/")
+    host = request.headers.get("X-Forwarded-Host", request.host)
+    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+    return f"{scheme}://{host}"
+
+
+@app.route("/api/v1/verdict")
+def api_v1_verdict():
+    """External API: verdict of the LATEST inspection of one serial number.
+    Query: serial (required, exact match, case-insensitive),
+           template (optional, exact recipe name),
+           max_age_hours (optional, ignore older inspections).
+    Always 200 when the question could be answered:
+      verdict = pass | fail | not_inspected."""
+    import re as _re
+    from datetime import datetime, timezone, timedelta
+    if not MONGO_AVAILABLE:
+        return jsonify({"error": "MongoDB unavailable"}), 503
+    serial = request.args.get("serial", "").strip()
+    if not serial or len(serial) > 200:
+        return jsonify({"error": "serial is required"}), 400
+
+    def _exact(value):
+        return {"$regex": f"^{_re.escape(value)}$", "$options": "i"}
+
+    conditions = [{"serial": _exact(serial)}]
+    template = request.args.get("template", "").strip()
+    if template:
+        conditions.append({"template_name": _exact(template)})
+    max_age = request.args.get("max_age_hours", type=float)
+    if max_age is not None:
+        if max_age <= 0:
+            return jsonify({"error": "max_age_hours must be positive"}), 400
+        # Result timestamps are stored as UTC+8 wall-clock strings.
+        cutoff = datetime.now(timezone(timedelta(hours=8))) - timedelta(hours=max_age)
+        conditions.append(
+            {"timestamp": {"$gte": cutoff.strftime("%Y-%m-%dT%H:%M:%S.%f")}})
+    grp_f = _group_filter()
+    if grp_f:
+        conditions.append(grp_f)
+    mongo_filter = {"$and": conditions}
+
+    out = {"serial": serial, "verdict": "not_inspected", "reason": "not_found",
+           "inspections": 0}
+    # "unrecognized" is what a result gets when no code was read off the board.
+    if serial.lower() == "unrecognized":
+        return jsonify(out)
+    doc = _results_col.find_one(mongo_filter, {"_id": 0},
+                                sort=[("timestamp", -1)])
+    if not doc:
+        return jsonify(out)
+    rid = doc.get("result_id", "")
+    out.update(_verdict_from_record(doc))
+    out.update({
+        "serial": doc.get("serial", serial),
+        "inspections": _results_col.count_documents(mongo_filter),
+        "result_id": rid,
+        "timestamp": doc.get("timestamp", ""),
+        "template": doc.get("template_name", ""),
+        "recipe_version": doc.get("recipe_version"),
+        "operator": doc.get("operator", ""),
+        "url": f"{_public_base_url()}/r/{rid}",
+    })
+    return jsonify(out)
+
+
+@app.route("/r/<rid>")
+def result_page(rid):
+    """Read-only page of one saved result — the link written to the line
+    system's log. Needs a normal login (operator / lead / admin)."""
+    import re as _re
+    if not _re.match(r'^[a-zA-Z0-9_\-]+$', rid):
+        return "Invalid result id", 400
+    if not MONGO_AVAILABLE:
+        return "Database unavailable", 503
+    q = {"result_id": rid}
+    q.update(_group_filter())
+    doc = _results_col.find_one(q, {"_id": 0})
+    if not doc:
+        return "Result not found", 404
+    zones = []
+    for i, z in enumerate(doc.get("zones") or []):
+        zones.append({
+            "label": z.get("label", ""),
+            "status": _zone_effective_status(z),
+            "calculated": z.get("status", "unchecked"),
+            "decided": bool(z.get("user_decision")),
+            "image": f"/api/results/{rid}/image/{z['image']}" if z.get("image") else "",
+            "reference": f"/api/results/{rid}/image/ref_{i}.jpg" if z.get("image") else "",
+        })
+    return render_template("result.html", r=doc, zones=zones,
+                           v=_verdict_from_record(doc))
 
 
 # ─── Internal results API (operators, full scope) ────────────────────────────
@@ -1872,6 +2325,8 @@ def result_image(rid, fname):
     import re
     if not re.match(r'^[a-zA-Z0-9_\-]+$', rid) or not re.match(r'^[a-zA-Z0-9_\-]+\.jpg$', fname):
         return jsonify({"error": "invalid"}), 400
+    if not _result_visible(rid):       # same answer as for a missing image
+        return jsonify({"error": "not found"}), 404
     data = r2.download_bytes(f"results/{rid}/{fname}")
     if not data:
         return jsonify({"error": "not found"}), 404
@@ -1879,101 +2334,75 @@ def result_image(rid, fname):
     return resp
 
 
-# ─── Template management (MongoDB + R2 images) ───────────────────────────────
+# ─── Recipes (templates collection + recipe_versions + samples) ──────────────
+# Operators read the recipe document, whose top-level fields mirror the ACTIVE
+# version (see recipes.py). Recipe Studio (lead/admin) edits drafts in
+# recipe_versions and collects samples; publishing makes a draft active.
 
 def _r2_tpl_prefix(tid: str) -> str:
     return f"templates/{tid}/"
 
 
-@app.route("/api/templates", methods=["GET"])
-def list_templates():
-    """Список сохранённых шаблонов."""
+def _recipe_or_404(tid: str):
+    q = {"id": tid}
+    q.update(_group_filter())
+    doc = _templates_col.find_one(q, {"_id": 0})
+    if doc:
+        recipes_mod.migrate_template(doc, _versions_col)
+    return doc
+
+
+def _studio_guard():
+    """Common checks for Recipe Studio routes: lead/admin + MongoDB."""
+    err = _require_lead_or_admin()
+    if err:
+        return err
     if not MONGO_AVAILABLE:
         return jsonify({"error": "MongoDB unavailable"}), 503
-    q = _group_filter()
+    return None
+
+
+@app.route("/api/templates", methods=["GET"])
+def list_templates():
+    """Recipes available for inspection: those with an active version.
+    A recipe without a group is shared: every group may inspect with it
+    (editing it in Studio stays with admins)."""
+    if not MONGO_AVAILABLE:
+        return jsonify({"error": "MongoDB unavailable"}), 503
+    q = _group_filter(shared=True)
     docs = _templates_col.find(q, {"_id": 0, "id": 1, "name": 1, "zones": 1,
                                    "created": 1, "barcode_mask": 1, "version": 1,
-                                   "group": 1})
+                                   "group": 1, "active_version": 1,
+                                   "versions": 1})
     templates = []
     for d in docs:
+        if not d.get("zones"):
+            continue  # recipe created in Studio, never published
         templates.append({
             "id": d["id"],
             "name": d["name"],
             "zone_count": len(d.get("zones", [])),
             "created": d.get("created", ""),
             "barcode_mask": d.get("barcode_mask", ""),
-            "version": d.get("version", 1),
+            "version": d.get("active_version") or d.get("version", 1),
             "group": d.get("group", ""),
         })
     templates.sort(key=lambda t: t.get("created", ""))
     return jsonify({"templates": templates})
 
 
-@app.route("/api/templates", methods=["POST"])
-def save_template():
-    """Сохранить текущую сессию (изображение + зоны) как шаблон."""
-    err = _require_lead_or_admin()
-    if err:
-        return err
-    if not MONGO_AVAILABLE:
-        return jsonify({"error": "MongoDB unavailable"}), 503
-    data = request.get_json(silent=True)
-    if not data or "session_id" not in data or "name" not in data:
-        return jsonify({"error": "session_id and name required"}), 400
-
-    sid = data["session_id"]
-    name = data["name"].strip()
-    if not name:
-        return jsonify({"error": "Template name cannot be empty"}), 400
-    if sid not in sessions:
-        return jsonify({"error": "Session not found"}), 404
-
-    s = sessions[sid]
-
-    if "zones" in data and isinstance(data["zones"], list) and len(data["zones"]) > 0:
-        s["zones"] = data["zones"]
-
-    if not s["zones"]:
-        return jsonify({"error": "Zones not defined"}), 400
-
-    import datetime
-    tid = uuid.uuid4().hex[:10]
-    prefix = _r2_tpl_prefix(tid)
-
-    # Upload reference image to R2
-    ref_name = "ref" + s["ref_path"].suffix
-    with open(s["ref_path"], "rb") as f:
-        r2.upload_bytes(prefix + ref_name, f.read(), "image/jpeg")
-
-    # Save metadata to MongoDB
-    meta = {
-        "id": tid,
-        "name": name,
-        "barcode_mask": data.get("barcode_mask") or "",
-        "ref_image": ref_name,
-        "zones": s["zones"],
-        "version": 1,
-        "created": datetime.datetime.now().isoformat(),
-        "versions": [],
-        "group": data.get("group", "").strip() if getattr(request, "auth_role", "") == "admin" else (getattr(request, "auth_group", "") or ""),
-    }
-    _templates_col.insert_one(meta)
-
-    return jsonify({"status": "ok", "template_id": tid})
-
-
 @app.route("/api/templates/<tid>", methods=["GET"])
 def load_template(tid):
-    """Загрузить шаблон → создать сессию с готовыми зонами."""
+    """Загрузить активную версию рецепта → создать сессию с готовыми зонами."""
     if not MONGO_AVAILABLE:
         return jsonify({"error": "MongoDB unavailable"}), 503
     q = {"id": tid}
-    q.update(_group_filter())
+    q.update(_group_filter(shared=True))
     meta = _templates_col.find_one(q, {"_id": 0})
-    if not meta:
+    if not meta or not meta.get("zones"):
         return jsonify({"error": "Template not found"}), 404
 
-    ref_bytes = r2.download_bytes(f"templates/{tid}/{meta['ref_image']}")
+    ref_bytes = r2.download_bytes(recipes_mod.ref_key(tid, meta["ref_image"]))
     if not ref_bytes:
         return jsonify({"error": "Failed to open template reference"}), 500
 
@@ -1990,6 +2419,7 @@ def load_template(tid):
     tmp_ref = UPLOAD_DIR / f"{tid}_ref.jpg"
     tmp_ref.write_bytes(ref_bytes)
 
+    version = meta.get("active_version") or meta.get("version", 1)
     sid = uuid.uuid4().hex[:12]
     sessions[sid] = {
         "ref_path": tmp_ref,
@@ -1998,7 +2428,13 @@ def load_template(tid):
         "checked": {},
         "template_id": tid,
         "template_name": meta["name"],
+        "template_version": version,
         "barcode_mask": meta.get("barcode_mask", ""),
+        # Calibrated recipes inspect with their model of normal variation
+        "calibration": meta.get("calibration"),
+        # Strictness comes from the recipe (None → config defaults)
+        "zone_sensitivity": meta.get("zone_sensitivity"),
+        "subzone_sensitivity": meta.get("subzone_sensitivity"),
         "operator": _check_auth() or "",
         "_created": time.time(),
         "_last_active": time.time(),
@@ -2016,7 +2452,8 @@ def load_template(tid):
         "session_id": sid,
         "template_name": meta["name"],
         "barcode_mask": meta.get("barcode_mask", ""),
-        "version": meta.get("version", 1),
+        "version": version,
+        "operator_notes": meta.get("operator_notes", ""),
         "image_b64": ref_b64,
         "width": w,
         "height": h,
@@ -2027,246 +2464,1005 @@ def load_template(tid):
 
 @app.route("/api/templates/<tid>", methods=["DELETE"])
 def delete_template(tid):
-    """Удалить шаблон."""
-    err = _require_lead_or_admin()
+    """Delete a recipe with all versions, samples and images (lead/admin)."""
+    err = _studio_guard()
     if err:
         return err
-    if not MONGO_AVAILABLE:
-        return jsonify({"error": "MongoDB unavailable"}), 503
     q = {"id": tid}
     q.update(_group_filter())
     res = _templates_col.delete_one(q)
     if res.deleted_count == 0:
         return jsonify({"error": "Template not found"}), 404
-    # Also delete images from R2
+    _versions_col.delete_many({"recipe_id": tid})
+    _samples_col.delete_many({"recipe_id": tid})
     r2.delete_prefix(_r2_tpl_prefix(tid))
+    r2.delete_prefix(f"samples/{tid}/")
     return jsonify({"status": "ok"})
 
 
-@app.route("/api/templates/<tid>", methods=["PUT"])
-def update_template(tid):
-    """Update template (new version): archive old version, overwrite with new data."""
-    err = _require_lead_or_admin()
+# ─── Recipe Studio API ───────────────────────────────────────────────────────
+
+_studio_refs: dict[tuple, tuple] = {}   # (tid, ref_image) → (img, sift)
+_studio_ref_lock = threading.Lock()
+
+
+def _reference(tid: str, ref_image: str):
+    """Decoded reference image (+ SIFT when the NN engine is available),
+    cached: alignment of every sample needs it."""
+    key = (tid, ref_image)
+    with _studio_ref_lock:
+        hit = _studio_refs.get(key)
+    if hit:
+        return hit
+    data = r2.download_bytes(recipes_mod.ref_key(tid, ref_image))
+    if not data:
+        return None, None
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    sift = reference_sift(img) if NN_AVAILABLE and img is not None else None
+    with _studio_ref_lock:
+        if len(_studio_refs) > 16:
+            _studio_refs.clear()
+        _studio_refs[key] = (img, sift)
+    return img, sift
+
+
+def _version_doc(tid: str, version: int):
+    return _versions_col.find_one({"recipe_id": tid, "version": version},
+                                  {"_id": 0})
+
+
+def _draft_of(tid: str):
+    return _versions_col.find_one({"recipe_id": tid,
+                                   "status": recipes_mod.STATUS_DRAFT},
+                                  {"_id": 0})
+
+
+def _derived_samples(tid: str, version: dict, kind: str | None = None):
+    q = {"recipe_id": tid}
+    if kind:
+        q["kind"] = kind
+    docs = _samples_col.find(q, {"_id": 0}).sort("uploaded_at", 1)
+    return [recipes_mod.derive_sample(d, version) for d in docs]
+
+
+def _calib_state(draft: dict, samples: list) -> dict:
+    cal = draft.get("calibration")
+    if not cal:
+        return {"present": False, "fresh": False}
+    return {"present": True,
+            "fresh": cal.get("fingerprint") == calibration_mod.fingerprint(draft, samples),
+            "missed": cal.get("missed", 0), "missed_detail": cal.get("missed_detail", []),
+            "view_outliers": len({sp["sample_id"] for z in cal.get("zones", [])
+                                  for sp in z.get("suspects", []) if (sp.get("view_dev") or 0)
+                                  > calibration_mod.VIEW_DEVIATION_MAX}),
+            "skipped": cal.get("skipped", []),
+            "margin": cal.get("margin"), "created_at": cal.get("created_at")}
+
+
+def _draft_state(tid: str, draft: dict) -> dict:
+    samples = _derived_samples(tid, draft)
+    summary = recipes_mod.sample_summary(draft, samples)
+    cstate = _calib_state(draft, samples) if NN_AVAILABLE else None
+    return {"summary": summary, "calibration_state": cstate,
+            "check": recipes_mod.publish_check(draft, summary, cstate)}
+
+
+@app.route("/studio")
+def studio_page():
+    if getattr(request, "auth_role", "") not in ("admin", "lead"):
+        return redirect("/")
+    return render_template("studio.html",
+                           auth_user=getattr(request, "auth_user", ""),
+                           auth_role=getattr(request, "auth_role", ""),
+                           auth_group=getattr(request, "auth_group", "") or "")
+
+
+@app.route("/api/recipes", methods=["GET"])
+def studio_list_recipes():
+    err = _studio_guard()
     if err:
         return err
-    if not MONGO_AVAILABLE:
-        return jsonify({"error": "MongoDB unavailable"}), 503
-    import datetime
-    q = {"id": tid}
-    q.update(_group_filter())
-    old_meta = _templates_col.find_one(q, {"_id": 0})
-    if not old_meta:
-        return jsonify({"error": "Template not found"}), 404
+    out = []
+    # Full documents: migration needs the embedded `versions` history
+    for doc in _templates_col.find(_group_filter(), {"_id": 0}):
+        recipes_mod.migrate_template(doc, _versions_col)
+        draft = _draft_of(doc["id"])
+        counts = {"good": 0, "defect": 0}
+        for row in _samples_col.aggregate([
+                {"$match": {"recipe_id": doc["id"], "excluded": {"$ne": True}}},
+                {"$group": {"_id": "$kind", "n": {"$sum": 1}}}]):
+            counts[row["_id"]] = row["n"]
+        out.append({
+            "id": doc["id"], "name": doc.get("name", ""),
+            "group": doc.get("group", ""),
+            "barcode_mask": doc.get("barcode_mask", ""),
+            "active_version": doc.get("active_version") if doc.get("zones") else None,
+            "draft_version": draft["version"] if draft else None,
+            "zone_count": len((draft or doc).get("zones", [])),
+            "samples": counts,
+            "updated": doc.get("updated") or doc.get("created", ""),
+        })
+    out.sort(key=lambda r: r["name"].lower())
+    return jsonify({"recipes": out})
 
+
+@app.route("/api/recipes", methods=["POST"])
+def studio_create_recipe():
+    """New recipe: header document + draft v1 (nothing visible to operators)."""
+    err = _studio_guard()
+    if err:
+        return err
     data = request.get_json(silent=True) or {}
-    old_version = old_meta.get("version", 1)
-    new_version = old_version + 1
-
-    # Archive old version as subdocument (without versions array)
-    archived = {k: v for k, v in old_meta.items(
-    ) if k not in ("_id", "versions")}
-
-    # Update fields
-    update_fields = {}
-    sid = data.get("session_id")
-    new_zones = data.get("zones")
-    prefix = _r2_tpl_prefix(tid)
-
-    if sid and sid in sessions and new_zones:
-        update_fields["zones"] = new_zones
-        s = sessions[sid]
-        ref_name = "ref" + s["ref_path"].suffix
-        with open(s["ref_path"], "rb") as f:
-            r2.upload_bytes(prefix + ref_name, f.read(), "image/jpeg")
-        update_fields["ref_image"] = ref_name
-    elif new_zones:
-        update_fields["zones"] = new_zones
-
-    if "name" in data and data["name"].strip():
-        update_fields["name"] = data["name"].strip()
-    if "barcode_mask" in data:
-        update_fields["barcode_mask"] = data["barcode_mask"] or ""
-
-    update_fields["version"] = new_version
-    update_fields["updated"] = datetime.datetime.now().isoformat()
-
-    _templates_col.update_one({"id": tid}, {
-        "$set": update_fields,
-        "$push": {"versions": archived}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Recipe name is required"}), 400
+    role = getattr(request, "auth_role", "")
+    group = ((data.get("group") or "").strip() if role == "admin"
+             else (getattr(request, "auth_group", "") or ""))
+    tid = uuid.uuid4().hex[:10]
+    user = getattr(request, "auth_user", "")
+    _templates_col.insert_one({
+        "id": tid, "name": name, "group": group,
+        "barcode_mask": (data.get("barcode_mask") or "").strip(),
+        "created": recipes_mod.now_iso(), "created_by": user,
+        "active_version": None, "version": None, "zones": [],
     })
-
-    return jsonify({"status": "ok", "version": new_version})
-
-
-@app.route("/api/templates/<tid>/versions", methods=["GET"])
-def list_template_versions(tid):
-    """List version history for a template."""
-    if not MONGO_AVAILABLE:
-        return jsonify({"error": "MongoDB unavailable"}), 503
-    q = {"id": tid}
-    q.update(_group_filter())
-    doc = _templates_col.find_one(q, {"_id": 0, "name": 1, "version": 1,
-                                                "created": 1, "updated": 1, "versions": 1,
-                                                "group": 1})
-    if not doc:
-        return jsonify({"error": "Template not found"}), 404
-
-    versions = [{"version": doc.get("version", 1),
-                 "created": doc.get("updated", doc.get("created", "")),
-                 "current": True}]
-    for v in doc.get("versions", []):
-        versions.append({"version": v.get("version", 1),
-                         "created": v.get("created", ""), "current": False})
-    versions.sort(key=lambda v: v["version"], reverse=True)
-    return jsonify({"template_id": tid, "name": doc["name"], "versions": versions})
+    draft = recipes_mod.new_draft(tid, 1, {
+        "name": name, "barcode_mask": (data.get("barcode_mask") or "").strip(),
+        "shooting_plan": data.get("shooting_plan") or "zones",
+        "operator_notes": data.get("operator_notes") or "",
+    }, user)
+    draft["parent"] = None
+    _versions_col.insert_one(draft)
+    return jsonify({"status": "ok", "recipe_id": tid, "version": 1})
 
 
-@app.route("/api/templates/<tid>/detail", methods=["GET"])
-def template_detail(tid):
-    """Return full template data (meta + reference image b64) for editing."""
-    if not MONGO_AVAILABLE:
-        return jsonify({"error": "MongoDB unavailable"}), 503
-    q = {"id": tid}
-    q.update(_group_filter())
-    meta = _templates_col.find_one(q, {"_id": 0})
-    if not meta:
-        return jsonify({"error": "Template not found"}), 404
-
-    prefix = _r2_tpl_prefix(tid)
-    ref_bytes = r2.download_bytes(prefix + meta["ref_image"])
-    if not ref_bytes:
-        return jsonify({"error": "Failed to open reference"}), 500
-
-    ref_img = cv2.imdecode(np.frombuffer(
-        ref_bytes, np.uint8), cv2.IMREAD_COLOR)
-    if ref_img is None:
-        return jsonify({"error": "Failed to decode reference"}), 500
-
-    h, w = ref_img.shape[:2]
-    zone_previews = []
-    for z in meta["zones"]:
-        crop = _crop_zone(ref_img, z)
-        zone_previews.append(_img_to_b64(crop))
-
-    # Version history from embedded versions array
-    versions_list = [{"version": meta.get("version", 1),
-                      "date": meta.get("updated", meta.get("created", "")),
-                      "current": True}]
-    for v in meta.get("versions", []):
-        versions_list.append({"version": v.get("version", 1),
-                              "date": v.get("updated", v.get("created", "")),
-                              "current": False,
-                              "name": v.get("name", ""),
-                              "zone_count": len(v.get("zones", []))})
-    versions_list.sort(key=lambda v: v["version"], reverse=True)
-
-    return jsonify({
-        "id": tid,
-        "name": meta["name"],
-        "barcode_mask": meta.get("barcode_mask", ""),
-        "version": meta.get("version", 1),
-        "created": meta.get("created", ""),
-        "updated": meta.get("updated", ""),
-        "zones": meta["zones"],
-        "image_b64": base64.b64encode(ref_bytes).decode(),
-        "width": w,
-        "height": h,
-        "previews": zone_previews,
-        "versions": versions_list,
-    })
-
-
-@app.route("/api/templates/<tid>/restore/<int:ver>", methods=["POST"])
-def restore_template_version(tid, ver):
-    """Restore a template to a specific version (creating a new version)."""
-    err = _require_lead_or_admin()
+@app.route("/api/recipes/<tid>", methods=["GET"])
+def studio_get_recipe(tid):
+    err = _studio_guard()
     if err:
         return err
-    if not MONGO_AVAILABLE:
-        return jsonify({"error": "MongoDB unavailable"}), 503
-    import datetime
-    q = {"id": tid}
-    q.update(_group_filter())
-    doc = _templates_col.find_one(q, {"_id": 0})
+    doc = _recipe_or_404(tid)
     if not doc:
-        return jsonify({"error": "Template not found"}), 404
-
-    # Find target version in embedded versions array
-    target = None
-    for v in doc.get("versions", []):
-        if v.get("version") == ver:
-            target = v
-            break
-    if not target:
-        return jsonify({"error": f"Version v{ver} not found"}), 404
-
-    old_version = doc.get("version", 1)
-    new_version = old_version + 1
-
-    # Archive current as subdocument
-    archived = {k: v for k, v in doc.items() if k not in ("_id", "versions")}
-
-    # Restore target fields but bump version
-    restored = {k: v for k, v in target.items()}
-    restored["version"] = new_version
-    restored["updated"] = datetime.datetime.now().isoformat()
-    restored["id"] = tid
-
-    # Check reference image exists in R2
-    prefix = _r2_tpl_prefix(tid)
-    ref_name = restored.get("ref_image", doc.get("ref_image"))
-    if not r2.key_exists(prefix + ref_name):
-        ref_name = doc.get("ref_image")
-    restored["ref_image"] = ref_name
-
-    _templates_col.update_one({"id": tid}, {
-        "$set": {k: v for k, v in restored.items()},
-        "$push": {"versions": archived}
+        return jsonify({"error": "Recipe not found"}), 404
+    versions = list(_versions_col.find(
+        {"recipe_id": tid},
+        {"_id": 0, "version": 1, "status": 1, "created_at": 1, "created_by": 1,
+         "published_at": 1, "published_by": 1, "migrated": 1,
+         "published_forced": 1, "published_accepted": 1,
+         "ref_shared_legacy": 1}).sort("version", -1))
+    draft = _draft_of(tid)
+    return jsonify({
+        "id": tid, "name": doc.get("name", ""), "group": doc.get("group", ""),
+        "barcode_mask": doc.get("barcode_mask", ""),
+        "active_version": doc.get("active_version") if doc.get("zones") else None,
+        "draft_version": draft["version"] if draft else None,
+        "versions": versions,
     })
 
-    return jsonify({"status": "ok", "version": new_version})
+
+@app.route("/api/recipes/<tid>/draft", methods=["POST"])
+def studio_open_draft(tid):
+    """Open a draft: copy of the active version (or of `from_version`)."""
+    err = _studio_guard()
+    if err:
+        return err
+    doc = _recipe_or_404(tid)
+    if not doc:
+        return jsonify({"error": "Recipe not found"}), 404
+    existing = _draft_of(tid)
+    if existing:
+        return jsonify({"status": "ok", "version": existing["version"],
+                        "existing": True})
+    data = request.get_json(silent=True) or {}
+    src_v = data.get("from_version") or doc.get("active_version")
+    base = _version_doc(tid, src_v) if src_v else None
+    if base is None:
+        return jsonify({"error": "Nothing to copy: recipe has no published version"}), 400
+    last = _versions_col.find_one({"recipe_id": tid}, sort=[("version", -1)])
+    new_v = last["version"] + 1
+    draft = recipes_mod.new_draft(tid, new_v, base,
+                                  getattr(request, "auth_user", ""))
+    if not draft.get("ref_size") and draft.get("ref_image"):
+        img, _ = _reference(tid, draft["ref_image"])
+        if img is not None:
+            draft["ref_size"] = [img.shape[1], img.shape[0]]
+            if not draft.get("ref_quality"):
+                draft["ref_quality"] = recipes_mod.photo_quality(img)
+    _versions_col.insert_one(draft)
+    return jsonify({"status": "ok", "version": new_v, "existing": False})
 
 
-@app.route("/api/admin/migrate-templates", methods=["POST"])
-def migrate_templates_to_mongo():
-    """One-time migration: move template JSONs from R2 to MongoDB."""
-    if not MONGO_AVAILABLE:
-        return jsonify({"error": "MongoDB unavailable"}), 503
+@app.route("/api/recipes/<tid>/draft", methods=["GET"])
+def studio_get_draft(tid):
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    if not draft:
+        return jsonify({"error": "No draft"}), 404
+    out = dict(draft)
+    out["image_b64"] = None
+    if draft.get("ref_image"):
+        data = r2.download_bytes(recipes_mod.ref_key(tid, draft["ref_image"]))
+        if data:
+            out["image_b64"] = base64.b64encode(data).decode()
+    out.update(_draft_state(tid, draft))
+    return jsonify(out)
 
-    all_keys = r2.list_keys("templates/")
-    meta_keys = [k for k in all_keys if k.endswith("/meta.json")]
-    migrated = 0
-    skipped = 0
 
-    for mk in meta_keys:
-        meta = r2.download_json(mk)
-        if not meta:
+@app.route("/api/recipes/<tid>/draft/state", methods=["GET"])
+def studio_draft_state(tid):
+    """Sample summary + publish check only (cheap; polled while capturing)."""
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    if not draft:
+        return jsonify({"error": "No draft"}), 404
+    return jsonify(_draft_state(tid, draft))
+
+
+_DRAFT_FIELDS = ("name", "barcode_mask", "zones", "shooting_plan",
+                 "operator_notes", "zone_sensitivity", "subzone_sensitivity")
+
+
+@app.route("/api/recipes/<tid>/draft", methods=["PUT"])
+def studio_update_draft(tid):
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    if not draft:
+        return jsonify({"error": "No draft"}), 404
+    data = request.get_json(silent=True) or {}
+    upd = {}
+    for k in _DRAFT_FIELDS:
+        if k not in data:
             continue
-        tid = meta.get("id")
-        if not tid:
+        v = data[k]
+        if k in ("zone_sensitivity", "subzone_sensitivity") and v is not None:
+            try:
+                v = max(0.0, min(2.0, float(v)))
+            except (TypeError, ValueError):
+                return jsonify({"error": f"{k} must be a number 0..2"}), 400
+        if k == "shooting_plan" and v not in ("zones", "board"):
+            return jsonify({"error": "shooting_plan must be 'zones' or 'board'"}), 400
+        if k == "zones":
+            zerr = _validate_zones(v)
+            if zerr:
+                return jsonify({"error": zerr}), 400
+        if k in ("name", "barcode_mask", "operator_notes") and isinstance(v, str):
+            v = v.strip()
+        upd[k] = v
+    if "name" in upd and not upd["name"]:
+        return jsonify({"error": "Recipe name is required"}), 400
+    if upd:
+        upd["updated_at"] = recipes_mod.now_iso()
+        _versions_col.update_one({"recipe_id": tid, "version": draft["version"]},
+                                 {"$set": upd})
+    draft.update(upd)
+    return jsonify({"status": "ok", **_draft_state(tid, draft)})
+
+
+def _validate_zones(zones) -> str | None:
+    if not isinstance(zones, list):
+        return "zones must be a list"
+    for i, z in enumerate(zones):
+        for k in ("x", "y", "w", "h"):
+            if not isinstance(z.get(k), (int, float)):
+                return f"Zone {i + 1}: missing '{k}'"
+        if z["w"] <= 0 or z["h"] <= 0:
+            return f"Zone {i + 1}: empty rectangle"
+        for j, sz in enumerate(z.get("subzones") or []):
+            for k in ("x", "y", "w", "h"):
+                if not isinstance(sz.get(k), (int, float)):
+                    return f"Zone {i + 1}, subzone {j + 1}: missing '{k}'"
+    return None
+
+
+@app.route("/api/recipes/<tid>/draft", methods=["DELETE"])
+def studio_discard_draft(tid):
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    if not draft:
+        return jsonify({"error": "No draft"}), 404
+    doc = _templates_col.find_one({"id": tid}, {"_id": 0, "zones": 1})
+    if not doc.get("zones"):
+        return jsonify({"error": "This is the only version of a new recipe; delete the recipe instead"}), 400
+    _versions_col.delete_one({"recipe_id": tid, "version": draft["version"]})
+    r2.delete_prefix(f"{_r2_tpl_prefix(tid)}v{draft['version']}/")
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/recipes/<tid>/draft/reference", methods=["POST"])
+def studio_upload_reference(tid):
+    """Reference image for the draft, with a quality check. Accepts one
+    image (`image`) or a blended image from the auto-blend tool."""
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    if not draft:
+        return jsonify({"error": "No draft"}), 404
+    f = request.files.get("image")
+    if not f or not _allowed(f.filename):
+        return jsonify({"error": "Upload a JPG/PNG image"}), 400
+    data = f.read()
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return jsonify({"error": "Failed to read image"}), 400
+    quality = recipes_mod.photo_quality(img)
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    ref_image = f"v{draft['version']}/ref.jpg"
+    r2.upload_bytes(recipes_mod.ref_key(tid, ref_image), buf.tobytes(), "image/jpeg")
+    with _studio_ref_lock:
+        _studio_refs.pop((tid, ref_image), None)
+    upd = {"ref_image": ref_image, "ref_size": [img.shape[1], img.shape[0]],
+           "ref_quality": quality, "ref_shared_legacy": False,
+           "updated_at": recipes_mod.now_iso()}
+    _versions_col.update_one({"recipe_id": tid, "version": draft["version"]},
+                             {"$set": upd})
+    draft.update(upd)
+    return jsonify({"status": "ok", "quality": quality,
+                    "width": img.shape[1], "height": img.shape[0],
+                    "image_b64": base64.b64encode(buf.tobytes()).decode(),
+                    **_draft_state(tid, draft)})
+
+
+@app.route("/api/recipes/<tid>/publish", methods=["POST"])
+def studio_publish(tid):
+    """Make the draft the active version. Blocked while publish_check has
+    blockers; an admin may override with {"force": true}. Defect samples the
+    calibration does not catch (check.needs_ack) must be accepted with
+    {"accept_missed": true, "reason": "..."}; the reason is kept on the version."""
+    err = _studio_guard()
+    if err:
+        return err
+    doc = _recipe_or_404(tid)
+    if not doc:
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    if not draft:
+        return jsonify({"error": "No draft"}), 404
+    state = _draft_state(tid, draft)
+    body = request.get_json(silent=True) or {}
+    force = bool(body.get("force"))
+    if not state["check"]["ok"]:
+        if not (force and getattr(request, "auth_role", "") == "admin"):
+            return jsonify({"error": "Recipe is not ready to publish",
+                            **state}), 409
+    accepted = None
+    if state["check"].get("needs_ack"):
+        reason = str(body.get("reason") or "").strip()
+        if not body.get("accept_missed") or len(reason) < 5:
+            return jsonify({"error": "Some defect samples are not caught: accept this and give a reason to publish",
+                            **state}), 409
+        accepted = {"missed": state["check"]["needs_ack"], "reason": reason[:500]}
+    _activate(tid, draft, forced=not state["check"]["ok"], accepted=accepted)
+    return jsonify({"status": "ok", "version": draft["version"]})
+
+
+def _activate(tid: str, version: dict, forced: bool = False, accepted: dict | None = None):
+    user = getattr(request, "auth_user", "")
+    _versions_col.update_many({"recipe_id": tid,
+                               "status": recipes_mod.STATUS_ACTIVE},
+                              {"$set": {"status": recipes_mod.STATUS_ARCHIVED}})
+    _versions_col.update_one(
+        {"recipe_id": tid, "version": version["version"]},
+        {"$set": {"status": recipes_mod.STATUS_ACTIVE,
+                  "published_at": recipes_mod.now_iso(),
+                  "published_by": user, "published_forced": forced,
+                  "published_accepted": accepted}})
+    _templates_col.update_one({"id": tid},
+                              {"$set": recipes_mod.mirror_update(version)})
+
+
+@app.route("/api/recipes/<tid>/rollback/<int:ver>", methods=["POST"])
+def studio_rollback(tid, ver):
+    """Put an archived version back on the line."""
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    v = _version_doc(tid, ver)
+    if not v or v["status"] != recipes_mod.STATUS_ARCHIVED:
+        return jsonify({"error": f"v{ver} is not an archived version"}), 404
+    _activate(tid, v)
+    return jsonify({"status": "ok", "version": ver})
+
+
+# ─── Calibration ─────────────────────────────────────────────────────────────
+
+_calib_jobs: dict[str, dict] = {}     # recipe id → {state, message, ...}
+_calib_jobs_lock = threading.Lock()
+
+
+def _run_calibration(tid: str, user: str):
+    job = _calib_jobs[tid]
+    try:
+        draft = _draft_of(tid)
+        samples = _derived_samples(tid, draft)
+
+        def load_photo(sm):
+            data = r2.download_bytes(sm["photo_key"])
+            return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+
+        def progress(msg, frac=None):
+            job["message"] = msg
+            if frac is not None:
+                job["progress"] = round(frac * 0.95, 3)     # the rest is saving
+
+        old = draft.get("calibration") or {}
+        cal, blobs = calibration_mod.calibrate(
+            draft, samples, load_photo, progress,
+            margin=old.get("margin") or calibration_mod.MARGIN_DEFAULT,
+            # limits chosen per zone survive recalibration (same zone index)
+            zone_margins={z["zone"]: z["margin"] for z in old.get("zones", []) if z.get("margin")})
+        job.update(message="Saving the model", progress=0.95)
+        for z in cal["zones"]:
+            key = f"{_r2_tpl_prefix(tid)}v{draft['version']}/calib/zone_{z['zone']}.npz"
+            r2.upload_bytes(key, blobs[z["zone"]], "application/octet-stream")
+            z["bank_key"] = key
+        cal["fingerprint"] = calibration_mod.fingerprint(draft, samples)
+        cal["created_at"] = recipes_mod.now_iso()
+        cal["created_by"] = user
+        _versions_col.update_one({"recipe_id": tid, "version": draft["version"]},
+                                 {"$set": {"calibration": cal}})
+        job.update(state="done", message="Calibration finished", progress=1.0, finished=time.time())
+    except Exception as e:  # report to the UI, keep the service alive
+        app.logger.exception("Calibration failed for %s", tid)
+        job.update(state="error", message=f"Calibration failed: {e}", finished=time.time())
+
+
+@app.route("/api/recipes/<tid>/calibrate", methods=["POST"])
+def studio_calibrate(tid):
+    """Start calibration of the draft in the background."""
+    err = _studio_guard()
+    if err:
+        return err
+    if not NN_AVAILABLE:
+        return jsonify({"error": "Neural engine unavailable"}), 503
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    if not draft:
+        return jsonify({"error": "No draft"}), 404
+    if not draft.get("ref_image") or not draft.get("zones"):
+        return jsonify({"error": "Add a reference and zones first"}), 400
+    with _calib_jobs_lock:
+        job = _calib_jobs.get(tid)
+        if job and job["state"] == "running":
+            return jsonify({"status": "running", "job": job}), 202
+        _calib_jobs[tid] = job = {"state": "running", "message": "Starting",
+                                  "progress": 0.0, "started": time.time()}
+    threading.Thread(target=_run_calibration,
+                     args=(tid, getattr(request, "auth_user", "")),
+                     daemon=True, name=f"calib-{tid}").start()
+    return jsonify({"status": "started", "job": job}), 202
+
+
+@app.route("/api/recipes/<tid>/calibrate", methods=["GET"])
+def studio_calibration_status(tid):
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    job = _calib_jobs.get(tid)
+    if job:   # server-side elapsed time, so client clock skew doesn't matter
+        job = dict(job, elapsed=round((job.get("finished") or time.time()) - job["started"], 1))
+    if request.args.get("job"):      # progress polling: job only, no report
+        return jsonify({"job": job})
+    draft = _draft_of(tid)
+    if not draft:
+        return jsonify({"error": "No draft"}), 404
+    state = _draft_state(tid, draft)
+    return jsonify({"job": job, "calibration": draft.get("calibration"),
+                    "margin_range": calibration_mod.MARGIN_RANGE,
+                    "defect_band": calibration_mod.DEFECT_BAND, **state})
+
+
+@app.route("/api/recipes/<tid>/draft/calibration", methods=["PUT"])
+def studio_set_strictness(tid):
+    """Change the OK limits of an existing calibration:
+    {"zones": {"<zone index>": OK limit}} per zone, or {"margin": m} for all."""
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    if not draft or not draft.get("calibration"):
+        return jsonify({"error": "Calibrate first"}), 404
+    body = request.get_json(silent=True) or {}
+    cal = draft["calibration"]
+    try:
+        if "zones" in body:
+            worst = {z["zone"]: max(z["good_scores"]) for z in cal["zones"] if z["good_scores"]}
+            zone_margins = {int(k): float(v) / worst[int(k)] for k, v in body["zones"].items()
+                            if int(k) in worst and worst[int(k)] > 0}
+            cal = calibration_mod.apply_margin(cal, zone_margins=zone_margins)
+        else:
+            cal = calibration_mod.apply_margin(cal, float(body.get("margin")))
+    except (TypeError, ValueError, AttributeError):
+        return jsonify({"error": "OK limits must be numbers"}), 400
+    _versions_col.update_one({"recipe_id": tid, "version": draft["version"]},
+                             {"$set": {"calibration": cal}})
+    draft["calibration"] = cal
+    return jsonify({"status": "ok", "calibration": cal, **_draft_state(tid, draft)})
+
+
+# ─── Samples ─────────────────────────────────────────────────────────────────
+
+def _align_sample(tid: str, version: dict, img) -> dict:
+    """Homography of a sample photo onto the version's reference."""
+    if not version.get("ref_image"):
+        return {"ref_image": None, "H": None, "reason": "no reference yet"}
+    ref, sift = _reference(tid, version["ref_image"])
+    if ref is None:
+        return {"ref_image": version["ref_image"], "H": None,
+                "reason": "reference missing"}
+    if not NN_AVAILABLE:
+        return {"ref_image": version["ref_image"], "H": None,
+                "reason": "alignment engine unavailable"}
+    M, info = estimate_homography(ref, img, ref_sift=sift)
+    return {"ref_image": version["ref_image"],
+            "H": M.tolist() if M is not None else None, **info}
+
+
+def _store_sample(tid: str, version: dict, data: bytes, kind: str,
+                  device: str, board: str, source: str) -> dict:
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Failed to read image")
+    sid = uuid.uuid4().hex[:12]
+    key = f"samples/{tid}/{sid}.jpg"
+    r2.upload_bytes(key, data, "image/jpeg")
+    doc = {
+        "id": sid, "recipe_id": tid, "kind": kind, "photo_key": key,
+        "width": img.shape[1], "height": img.shape[0],
+        "device": (device or "").strip()[:60] or None,
+        "board": (board or "").strip()[:30] or None,
+        "source": source,
+        "uploaded_by": getattr(request, "auth_user", "") or source,
+        "uploaded_at": recipes_mod.now_iso(),
+        "quality": recipes_mod.photo_quality(img),
+        "align": _align_sample(tid, version, img),
+        "defects": [], "excluded": False,
+    }
+    _samples_col.insert_one(dict(doc))
+    return recipes_mod.derive_sample(doc, version)
+
+
+def _sample_kind(value) -> str | None:
+    return value if value in ("good", "defect") else None
+
+
+@app.route("/api/recipes/<tid>/samples", methods=["POST"])
+def studio_add_samples(tid):
+    """Upload one or more sample photos (field `photo`, repeatable)."""
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    if not draft:
+        return jsonify({"error": "Open a draft first"}), 404
+    kind = _sample_kind(request.form.get("kind"))
+    if not kind:
+        return jsonify({"error": "kind must be 'good' or 'defect'"}), 400
+    files = request.files.getlist("photo")
+    if not files:
+        return jsonify({"error": "No photos"}), 400
+    added = []
+    for f in files:
+        if not _allowed(f.filename or "x.jpg"):
             continue
+        try:
+            added.append(_store_sample(tid, draft, f.read(), kind,
+                                       request.form.get("device", ""),
+                                       request.form.get("board", ""),
+                                       "upload"))
+        except ValueError as e:
+            added.append({"error": str(e), "filename": f.filename})
+    return jsonify({"samples": added, **_draft_state(tid, draft)})
 
-        # Check if already in MongoDB
-        if _templates_col.find_one({"id": tid}):
-            skipped += 1
+
+@app.route("/api/recipes/<tid>/samples", methods=["GET"])
+def studio_list_samples(tid):
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    version = draft or _version_doc(tid, _templates_col.find_one(
+        {"id": tid}, {"active_version": 1}).get("active_version"))
+    if not version:
+        return jsonify({"samples": []})
+    kind = _sample_kind(request.args.get("kind"))
+    return jsonify({"samples": _derived_samples(tid, version, kind)})
+
+
+def _sample_or_404(sample_id: str):
+    s = _samples_col.find_one({"id": sample_id}, {"_id": 0})
+    if not s or not _recipe_or_404(s["recipe_id"]):
+        return None
+    return s
+
+
+@app.route("/api/samples/<sample_id>/image")
+def studio_sample_image(sample_id):
+    err = _studio_guard()
+    if err:
+        return err
+    s = _sample_or_404(sample_id)
+    if not s:
+        return jsonify({"error": "not found"}), 404
+    data = r2.download_bytes(s["photo_key"])
+    if not data:
+        return jsonify({"error": "not found"}), 404
+    size = {"thumb": 360.0, "view": 1600.0}.get(request.args.get("size"))
+    if size:
+        img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        scale = size / max(img.shape[:2])
+        if scale < 1:
+            img = cv2.resize(img, None, fx=scale, fy=scale,
+                             interpolation=cv2.INTER_AREA)
+        data = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 82])[1].tobytes()
+    resp = send_file(io.BytesIO(data), mimetype="image/jpeg")
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    return resp
+
+
+@app.route("/api/samples/<sample_id>/aligned")
+def studio_sample_aligned(sample_id):
+    """Sample warped onto the draft reference — used to draw defect boxes in
+    reference coordinates. ?zone=<i> returns that zone (with some margin), as
+    the calibration sees it; ?size=thumb a small version."""
+    err = _studio_guard()
+    if err:
+        return err
+    s = _sample_or_404(sample_id)
+    if not s:
+        return jsonify({"error": "not found"}), 404
+    version = _draft_of(s["recipe_id"])
+    if not version:
+        return jsonify({"error": "No draft"}), 404
+    d = recipes_mod.derive_sample(s, version)
+    if not d["aligned"]:
+        return jsonify({"error": "Sample is not aligned to the current reference"}), 409
+    data = r2.download_bytes(s["photo_key"])
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    rw, rh = version["ref_size"]
+    H = np.asarray(s["align"]["H"], np.float64)
+    zi = request.args.get("zone", type=int)
+    if zi is not None and 0 <= zi < len(version.get("zones", [])):
+        z = version["zones"][zi]
+        pad = 0.1
+        x1, y1 = int((z["x"] - z["w"] * pad) * rw), int((z["y"] - z["h"] * pad) * rh)
+        w, h = int(z["w"] * (1 + 2 * pad) * rw), int(z["h"] * (1 + 2 * pad) * rh)
+        T = np.array([[1, 0, -x1], [0, 1, -y1], [0, 0, 1]], np.float64)
+        warped = cv2.warpPerspective(img, T @ H, (w, h))
+        cv2.rectangle(warped, (int(z["w"] * pad * rw), int(z["h"] * pad * rh)),
+                      (int(z["w"] * (1 + pad) * rw), int(z["h"] * (1 + pad) * rh)), (0, 200, 255), 3)
+    else:
+        warped = cv2.warpPerspective(img, H, (rw, rh))
+    limit = 240.0 if request.args.get("size") == "thumb" else 1600.0
+    scale = limit / max(warped.shape[:2])
+    if scale < 1:
+        warped = cv2.resize(warped, None, fx=scale, fy=scale,
+                            interpolation=cv2.INTER_AREA)
+    buf = cv2.imencode(".jpg", warped, [cv2.IMWRITE_JPEG_QUALITY, 88])[1]
+    return send_file(io.BytesIO(buf.tobytes()), mimetype="image/jpeg")
+
+
+@app.route("/api/samples/<sample_id>", methods=["PATCH"])
+def studio_update_sample(sample_id):
+    """Exclude/include, move between good and defect, set board/device,
+    or replace defect labels: [{box:{x,y,w,h}, type}] in reference coords."""
+    err = _studio_guard()
+    if err:
+        return err
+    s = _sample_or_404(sample_id)
+    if not s:
+        return jsonify({"error": "not found"}), 404
+    data = request.get_json(silent=True) or {}
+    upd = {}
+    if "excluded" in data:
+        upd["excluded"] = bool(data["excluded"])
+    if "kind" in data:
+        kind = _sample_kind(data["kind"])
+        if not kind:
+            return jsonify({"error": "kind must be 'good' or 'defect'"}), 400
+        upd["kind"] = kind
+        if kind == "good":
+            upd["defects"] = []
+    for k in ("device", "board"):
+        if k in data:
+            upd[k] = (data[k] or "").strip()[:60] or None
+    if "defects" in data:
+        defects = []
+        for d in data["defects"] or []:
+            box = d.get("box") or {}
+            try:
+                box = {k: float(box[k]) for k in ("x", "y", "w", "h")}
+            except (KeyError, TypeError, ValueError):
+                return jsonify({"error": "Each defect needs box {x,y,w,h}"}), 400
+            if not (0 <= box["x"] <= 1 and 0 <= box["y"] <= 1
+                    and box["w"] > 0 and box["h"] > 0):
+                return jsonify({"error": "Defect box must be inside the image"}), 400
+            dtype = d.get("type") if d.get("type") in recipes_mod.DEFECT_TYPES else "other"
+            defects.append({"box": box, "type": dtype,
+                            "note": (d.get("note") or "")[:200]})
+        upd["defects"] = defects
+        if defects:
+            upd["kind"] = "defect"
+    if upd:
+        _samples_col.update_one({"id": sample_id}, {"$set": upd})
+    s.update(upd)
+    version = _draft_of(s["recipe_id"])
+    out = recipes_mod.derive_sample(s, version) if version else s
+    state = _draft_state(s["recipe_id"], version) if version else {}
+    return jsonify({"sample": out, **state})
+
+
+@app.route("/api/samples/<sample_id>", methods=["DELETE"])
+def studio_delete_sample(sample_id):
+    err = _studio_guard()
+    if err:
+        return err
+    s = _sample_or_404(sample_id)
+    if not s:
+        return jsonify({"error": "not found"}), 404
+    _samples_col.delete_one({"id": sample_id})
+    r2.delete_key(s["photo_key"])
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/recipes/<tid>/samples/realign", methods=["POST"])
+def studio_realign_samples(tid):
+    """Re-align samples made against an older reference image."""
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    draft = _draft_of(tid)
+    if not draft:
+        return jsonify({"error": "No draft"}), 404
+    n = 0
+    for s in _samples_col.find({"recipe_id": tid}, {"_id": 0}):
+        if (s.get("align") or {}).get("ref_image") == draft.get("ref_image"):
             continue
+        data = r2.download_bytes(s["photo_key"])
+        img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR) if data else None
+        if img is None:
+            continue
+        _samples_col.update_one({"id": s["id"]},
+                                {"$set": {"align": _align_sample(tid, draft, img)}})
+        n += 1
+    return jsonify({"status": "ok", "realigned": n, **_draft_state(tid, draft)})
 
-        # Collect version history from R2
-        prefix = _r2_tpl_prefix(tid)
-        ver_keys = [k for k in r2.list_keys(
-            prefix + "versions/") if k.endswith(".json")]
-        versions = []
-        for vk in sorted(ver_keys):
-            vm = r2.download_json(vk)
-            if vm:
-                versions.append(vm)
 
-        meta["versions"] = versions
-        meta.pop("_id", None)
-        _templates_col.insert_one(meta)
-        migrated += 1
+# ─── Sample capture from a phone ─────────────────────────────────────────────
 
-    return jsonify({"status": "ok", "migrated": migrated, "skipped": skipped})
+@app.route("/api/recipes/<tid>/sample_qr", methods=["POST"])
+def studio_sample_qr(tid):
+    """QR for the phone page in sample mode, bound to this recipe's draft."""
+    err = _studio_guard()
+    if err:
+        return err
+    if not _recipe_or_404(tid):
+        return jsonify({"error": "Recipe not found"}), 404
+    if not _draft_of(tid):
+        return jsonify({"error": "Open a draft first"}), 404
+    user = getattr(request, "auth_user", "")
+    with _MOBILE_TOKENS_LOCK:
+        token = next((t for t, v in _mobile_tokens.items()
+                      if v.get("recipe") == tid and v.get("user") == user), None)
+        token = token or secrets.token_urlsafe(16)
+        _mobile_tokens[token] = {"sid": None, "recipe": tid, "user": user,
+                                 "mode": "samples", "ts": time.time()}
+        _persist_mobile_tokens()
+    base = app.config.get("BASE_URL", "").rstrip("/") or request.host_url.rstrip("/")
+    url = f"{base}/mobile/samples?token={token}"
+    qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M,
+                       box_size=8, border=2)
+    qr.add_data(url)
+    qr.make(fit=True)
+    buf = io.BytesIO()
+    qr.make_image(fill_color="white", back_color="#1a1a2e").save(buf, format="PNG")
+    return jsonify({"qr_b64": base64.b64encode(buf.getvalue()).decode(),
+                    "url": url, "token": token})
+
+
+def _sample_token(token: str):
+    entry = _mobile_tokens.get(token)
+    if not entry or entry.get("mode") != "samples":
+        return None, None
+    draft = _draft_of(entry["recipe"]) if MONGO_AVAILABLE else None
+    return entry, draft
+
+
+@app.route("/mobile/samples")
+def mobile_samples_page():
+    resp = make_response(render_template("mobile_samples.html"))
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+_NO_DRAFT_MSG = ("This recipe has no open draft. Open a draft in Recipe "
+                 "Studio, then scan the new QR code.")
+
+
+@app.route("/api/mobile/<token>/sample_status")
+def mobile_sample_status(token):
+    entry, draft = _sample_token(token)
+    if not entry:
+        return jsonify({"error": "Invalid or expired link"}), 404
+    if not draft:
+        return jsonify({"error": _NO_DRAFT_MSG}), 409
+    doc = _templates_col.find_one({"id": entry["recipe"]}, {"_id": 0, "name": 1})
+    state = _draft_state(entry["recipe"], draft)
+    return jsonify({"recipe": doc.get("name", "") if doc else "",
+                    "version": draft["version"],
+                    "has_reference": bool(draft.get("ref_image")),
+                    "summary": state["summary"],
+                    "min_good": recipes_mod.MIN_GOOD_PER_ZONE,
+                    "min_defect": recipes_mod.MIN_DEFECT_PER_ZONE})
+
+
+# ─── Live viewpoint hint (phone viewfinder) ──────────────────────────────────
+# The phone sends a small frame 2–3 times a second while framing a zone; the
+# answer says which zones are fully in the frame and, per zone, how far the
+# viewpoint is from the typical viewpoint of the good samples and which way to
+# move the phone. Only a hint: capturing is never blocked.
+
+def _guide_frame():
+    f = request.files.get("photo")
+    if not f:
+        return None
+    img = cv2.imdecode(np.frombuffer(f.read(), np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    k = 640.0 / max(img.shape[:2])      # enough for a viewpoint estimate within ~1°
+    return cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_AREA) if k < 1 else img
+
+
+# Hints are capped server-wide: one at a time and at most one start every
+# GUIDE_SPACING s (≈ 30 % of one core; measured: a zone check takes 0.98 s
+# instead of 0.8 s with any number of phones framing). With several phones
+# framing at once the hints get less frequent instead of slowing down inspections.
+GUIDE_SPACING = 0.6
+_guide_lock = threading.Lock()
+_guide_state = {"busy": False, "last": 0.0}
+
+
+def _guide_take() -> bool:
+    with _guide_lock:
+        now = time.time()
+        if _guide_state["busy"] or now - _guide_state["last"] < GUIDE_SPACING:
+            return False
+        _guide_state.update(busy=True, last=now)
+        return True
+
+
+def _guide_release():
+    with _guide_lock:
+        _guide_state["busy"] = False
+
+
+def _guide(ref_img, ref_sift, zones, views, frame) -> dict:
+    """Caller holds the slot (_guide_take); released here."""
+    try:
+        H, _ = estimate_homography(ref_img, frame, ref_sift, nfeatures=1500)
+    finally:
+        _guide_release()
+    if H is None:
+        return {"aligned": False, "zones": []}
+    wh = (frame.shape[1], frame.shape[0])
+    ref_wh = (ref_img.shape[1], ref_img.shape[0])
+    out = []
+    for zi, in_frame in enumerate(recipes_mod.zone_visibility(H, wh, ref_wh, zones)):
+        hint = calibration_mod.view_hint(H, wh, ref_wh, zones[zi], views[zi]) if in_frame and views.get(zi) else None
+        out.append({"zone": zi, "label": zones[zi].get("label", f"Zone {zi + 1}"), "in_frame": in_frame,
+                    "view_dev": hint[0] if hint else None, "move": hint[1] if hint else None})
+    return {"aligned": True, "zones": out,
+            "limits": [calibration_mod.VIEW_GOOD, calibration_mod.VIEW_DEVIATION_MAX]}
+
+
+@app.route("/api/mobile/<token>/guide", methods=["POST"])
+def mobile_guide(token):
+    """Viewpoint hint for the inspection phone (typical viewpoint from the
+    recipe's calibration)."""
+    sid = _get_token_session(token)
+    if not sid or sid not in sessions:
+        return jsonify({"error": "Invalid link"}), 404
+    if not NN_AVAILABLE:
+        return jsonify({"aligned": False, "zones": []})
+    if not _guide_take():
+        return jsonify({"busy": True})
+    frame = _guide_frame()
+    if frame is None:
+        _guide_release()
+        return jsonify({"error": "Photo not found"}), 400
+    s = sessions[sid]
+    if s.get("_ref_sift") is None:
+        s["_ref_sift"] = reference_sift(s["ref_img"])
+    views = {zc["zone"]: zc["view"] for zc in (s.get("calibration") or {}).get("zones", []) if zc.get("view")}
+    return jsonify(_guide(s["ref_img"], s["_ref_sift"], s["zones"], views, frame))
+
+
+_guide_views: dict[tuple, tuple] = {}     # (recipe, draft version) → (time, views)
+
+
+@app.route("/api/mobile/<token>/sample_guide", methods=["POST"])
+def mobile_sample_guide(token):
+    """Viewpoint hint for the lead's phone while collecting samples (typical
+    viewpoint from the good samples taken so far)."""
+    entry, draft = _sample_token(token)
+    if not entry:
+        return jsonify({"error": "Invalid or expired link"}), 404
+    if not draft or not draft.get("ref_image") or not NN_AVAILABLE:
+        return jsonify({"aligned": False, "zones": []})
+    tid = entry["recipe"]
+    key = (tid, draft["version"])
+    hit = _guide_views.get(key)
+    if not hit or time.time() - hit[0] > 15:       # new samples change the typical viewpoint
+        hit = (time.time(), calibration_mod.typical_views(draft, _derived_samples(tid, draft)))
+        if len(_guide_views) > 50:
+            _guide_views.clear()
+        _guide_views[key] = hit
+    ref, sift = _reference(tid, draft["ref_image"])
+    if ref is None or sift is None:
+        return jsonify({"aligned": False, "zones": []})
+    if not _guide_take():
+        return jsonify({"busy": True})
+    frame = _guide_frame()
+    if frame is None:
+        _guide_release()
+        return jsonify({"error": "Photo not found"}), 400
+    return jsonify(_guide(ref, sift, draft.get("zones", []), hit[1], frame))
+
+
+@app.route("/api/mobile/<token>/sample", methods=["POST"])
+def mobile_add_sample(token):
+    entry, draft = _sample_token(token)
+    if not entry:
+        return jsonify({"error": "Invalid or expired link"}), 404
+    if not draft:
+        return jsonify({"error": _NO_DRAFT_MSG}), 409
+    kind = _sample_kind(request.form.get("kind"))
+    f = request.files.get("photo")
+    if not kind or not f:
+        return jsonify({"error": "kind and photo are required"}), 400
+    try:
+        s = _store_sample(entry["recipe"], draft, f.read(), kind,
+                          request.form.get("device", ""),
+                          request.form.get("board", ""), "phone")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    _samples_col.update_one({"id": s["id"]},
+                            {"$set": {"uploaded_by": entry.get("user", "phone")}})
+    return jsonify({"sample": {k: s[k] for k in ("id", "kind", "quality",
+                                                 "aligned", "visible_zones")},
+                    "summary": _draft_state(entry["recipe"], draft)["summary"]})
 
 
 # ─── Mobile Camera ────────────────────────────────────────────────────────────
@@ -2277,26 +3473,26 @@ def generate_mobile_qr(sid):
     if sid not in sessions:
         return jsonify({"error": "Session not found"}), 404
 
-    # Generate a fresh token for each new session so the displayed URL changes,
-    # but keep old tokens alive (remapped) so mobile phones don't need to re-scan.
+    # Each desktop station owns its token. When the station starts a new
+    # session it sends its previous token back, and only that token is
+    # rebound — so its phone keeps working and other stations' phones are
+    # never redirected to this session.
+    data = request.get_json(silent=True) or {}
+    prev = data.get("prev_token")
     with _MOBILE_TOKENS_LOCK:
-        tokens = _load_mobile_tokens()
-        existing = next((t for t, s in tokens.items() if s == sid), None)
+        existing = next((t for t, v in _mobile_tokens.items()
+                         if v.get("sid") == sid), None)
         if existing:
             token = existing
+        elif isinstance(prev, str) and prev in _mobile_tokens and (
+                _mobile_tokens[prev].get("mode") != "samples") and (
+                _mobile_tokens[prev].get("sid") not in sessions
+                or sessions[_mobile_tokens[prev]["sid"]].get("operator")
+                == sessions[sid].get("operator")):
+            token = prev
         else:
-            # Remap old tokens to new session (backward compat for mobile)
-            for t in list(tokens):
-                if tokens[t] != sid:
-                    tokens[t] = sid
-            # Always generate a fresh token so the URL visually changes
             token = secrets.token_urlsafe(16)
-            tokens[token] = sid
-            # Cap at 5 tokens max — remove oldest (first inserted) ones
-            while len(tokens) > 5:
-                oldest = next(iter(tokens))
-                del tokens[oldest]
-            _save_mobile_tokens(tokens)
+        _bind_token(token, sid)
 
     if sid not in mobile_photos:
         mobile_photos[sid] = []
@@ -2455,10 +3651,20 @@ def mobile_detect_anchors(token):
 
 @app.route("/api/mobile/<token>/serial", methods=["POST"])
 def mobile_serial(token):
-    """Upload serial number photo from mobile."""
+    """Serial number from the phone: a photo to read on the server, or
+    {"code", "code_type"} already read on the phone (BarcodeDetector / zxing-wasm)."""
     sid = _get_token_session(token)
     if not sid or sid not in sessions:
         return jsonify({"error": "Invalid link"}), 404
+
+    code = (request.form.get("code") or "").strip()
+    if code:
+        if len(code) > 200:
+            return jsonify({"error": "Code too long"}), 400
+        code_type = (request.form.get("code_type") or "barcode").strip()[:40]
+        sessions[sid]["serial"] = code
+        sessions[sid]["serial_type"] = code_type
+        return jsonify({"serial": code, "type": code_type})
 
     file = request.files.get("photo")
     if not file:
@@ -2527,7 +3733,9 @@ def mobile_skip_board(token):
 
 @app.route("/api/mobile/<token>/zone_photo", methods=["POST"])
 def mobile_zone_photo(token):
-    """Upload a zone photo from mobile → stored for desktop to pick up."""
+    """Zone photo from the phone: checked right away. The verdict goes back to
+    the phone in the response; the full result is queued for the desktop,
+    which shows it on its next poll."""
     sid = _get_token_session(token)
     if not sid or sid not in sessions:
         return jsonify({"error": "Invalid link"}), 404
@@ -2535,23 +3743,52 @@ def mobile_zone_photo(token):
     file = request.files.get("photo")
     if not file:
         return jsonify({"error": "Photo not found"}), 400
-
-    photo_bytes = file.read()
-    if sid not in mobile_photos:
-        mobile_photos[sid] = []
-    mobile_photos[sid].append(photo_bytes)
-    # Cap queue to prevent unbounded memory growth
-    while len(mobile_photos[sid]) > 30:
-        mobile_photos[sid].pop(0)
-
-    return jsonify({"status": "ok", "count": len(mobile_photos[sid])})
+    img = cv2.imdecode(np.frombuffer(file.read(), np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return jsonify({"error": "Failed to read image"}), 400
+    s = sessions[sid]
+    # Downscale large phone photos (up to 2× the reference) to speed up SIFT
+    ref_h, ref_w = s["ref_img"].shape[:2]
+    h, w = img.shape[:2]
+    max_dim = max(ref_h, ref_w) * 2
+    if max(h, w) > max_dim:
+        k = max_dim / max(h, w)
+        img = cv2.resize(img, (int(w * k), int(h * k)))
+    try:
+        with _check_slots:
+            out = _check_zone_impl(sid, photo_img=img, sens_override=s.get("_mobile_sens"))
+    except Exception as e:
+        app.logger.exception("Phone photo check failed")
+        return jsonify({"error": f"Internal error: {e}"}), 500
+    resp, code = out if isinstance(out, tuple) else (out, 200)
+    data = resp.get_json()
+    if code != 200:
+        return jsonify({"error": data.get("error", "Check failed")}), code
+    queue = mobile_photos.setdefault(sid, [])
+    queue.append(data)
+    while len(queue) > 30:      # desktop not polling: keep memory bounded
+        queue.pop(0)
+    defect = data.get("defect") or {}
+    return jsonify({"status": "ok", "matched": data.get("matched"),
+                    "zone": data.get("best_zone_label"),
+                    "result": defect.get("status"), "verdict": defect.get("verdict"),
+                    "checked_zones": data.get("checked_zones", []),
+                    "view_dev": data.get("view_dev")})
 
 
 @app.route("/api/session/<sid>/mobile_photos", methods=["GET"])
 def get_mobile_photos(sid):
-    """Desktop polls this to check for new photos from mobile."""
+    """Desktop polls this for phone results and the serial. A lead/admin
+    desktop passes its strictness override, applied to the phone's photos."""
     if sid not in sessions:
         return jsonify({"error": "Session not found"}), 404
+    if getattr(request, "auth_role", "") in ("admin", "lead"):
+        try:
+            zs, ss = request.args.get("zone_sensitivity"), request.args.get("subzone_sensitivity")
+            sessions[sid]["_mobile_sens"] = ((max(0.0, min(2.0, float(zs))), max(0.0, min(2.0, float(ss))))
+                                             if zs is not None and ss is not None else None)
+        except (TypeError, ValueError):
+            pass
 
     photos = mobile_photos.get(sid, [])
     serial = sessions[sid].get("serial", "")
@@ -2566,78 +3803,23 @@ def get_mobile_photos(sid):
 
 @app.route("/api/session/<sid>/mobile_photos/next", methods=["POST"])
 def pop_mobile_photo(sid):
-    """Desktop fetches the next mobile photo (FIFO) and processes it as a zone check."""
+    """Desktop takes the next phone result (FIFO), already checked on upload."""
     if sid not in sessions:
         return jsonify({"error": "Session not found"}), 404
 
     photos = mobile_photos.get(sid, [])
     if not photos:
         return jsonify({"error": "No photos in queue"}), 404
-
-    photo_bytes = photos.pop(0)
-    img = cv2.imdecode(np.frombuffer(photo_bytes, np.uint8), cv2.IMREAD_COLOR)
-    if img is None:
-        return jsonify({"error": "Failed to read image"}), 400
-
-    # Downscale large mobile photos to match reference size (speed up SIFT)
-    ref_img = sessions[sid]["ref_img"]
-    ref_h, ref_w = ref_img.shape[:2]
-    h, w = img.shape[:2]
-    max_dim = max(ref_h, ref_w) * 2  # Allow up to 2x reference size
-    if max(h, w) > max_dim:
-        scale = max_dim / max(h, w)
-        img = cv2.resize(img, (int(w * scale), int(h * scale)))
-
-    return _check_zone_impl(sid, photo_img=img)
+    return jsonify(photos.pop(0))
 
 
-# ─── R2 Migration: upload existing local data ─────────────────────────────────
-
-@app.route("/api/r2/migrate", methods=["POST"])
-def r2_migrate():
-    """Upload all local templates and results to R2 (one-time migration)."""
-    uploaded = {"templates": 0, "results": 0, "logs": 0}
-
-    # Migrate templates
-    if TEMPLATE_DIR.exists():
-        for tpl_dir in TEMPLATE_DIR.iterdir():
-            if not tpl_dir.is_dir():
-                continue
-            tid = tpl_dir.name
-            prefix = f"templates/{tid}/"
-            for fp in tpl_dir.rglob("*"):
-                if not fp.is_file():
-                    continue
-                key = prefix + str(fp.relative_to(tpl_dir))
-                ct = "application/json" if fp.suffix == ".json" else "image/jpeg"
-                r2.upload_bytes(key, fp.read_bytes(), ct)
-                uploaded["templates"] += 1
-
-    # Migrate results
-    if RESULTS_DIR.exists():
-        for item in RESULTS_DIR.iterdir():
-            if item.is_dir():
-                rid = item.name
-                prefix = f"results/{rid}/"
-                for fp in item.rglob("*"):
-                    if not fp.is_file():
-                        continue
-                    key = prefix + str(fp.relative_to(item))
-                    ct = "application/json" if fp.suffix == ".json" else "image/jpeg"
-                    r2.upload_bytes(key, fp.read_bytes(), ct)
-                    uploaded["results"] += 1
-            elif item.suffix == ".jsonl":
-                # Migrate log files
-                key = f"logs/{item.name}"
-                r2.upload_bytes(key, item.read_bytes(), "text/plain")
-                uploaded["logs"] += 1
-
-    return jsonify({"status": "ok", "uploaded": uploaded})
-
+# ─── R2 diagnostics ───────────────────────────────────────────────────────
 
 @app.route("/api/r2/status")
 def r2_status():
-    """Check R2 connectivity and list object counts."""
+    """Check R2 connectivity and list object counts (admin only)."""
+    if getattr(request, "auth_role", "") != "admin":
+        return jsonify({"error": "Admin only"}), 403
     try:
         tpl_keys = r2.list_keys("templates/")
         res_keys = r2.list_keys("results/")
@@ -2648,8 +3830,9 @@ def r2_status():
             "results_objects": len(res_keys),
             "logs_objects": len(log_keys),
         })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    except Exception:
+        app.logger.exception("R2 status check failed")
+        return jsonify({"status": "error"}), 500
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────

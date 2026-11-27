@@ -18,17 +18,24 @@
                 <h1>Zone Inspect</h1>
                 <p>// inspection &amp; defect analysis system v0.0.943</p>
             </div>
-            <div class="sens-controls">
-                <label>Zone <input type="number" id="inp-zone-sens" min="0" max="2" step="0.01" value="0.50"></label>
+            {% if auth_role in ('admin', 'lead') %}
+            <div class="sens-controls" title="Strictness comes from the recipe. Override only for trial runs.">
+                <label><input type="checkbox" id="inp-sens-override"> Override</label>
+                <label>Zone <input type="number" id="inp-zone-sens" min="0" max="2" step="0.01" value="0.50" disabled></label>
                 <label>Subzone <input type="number" id="inp-subzone-sens" min="0" max="2" step="0.01"
-                        value="0.51"></label>
+                        value="0.51" disabled></label>
             </div>
+            {% endif %}
             <div style="display:flex;gap:8px;align-items:center">
                 <span id="auth-badge"
                     style="font-size:12px;color:var(--muted);border:1px solid var(--border);padding:4px 10px;border-radius:6px;white-space:nowrap">{{
                     auth_user }}
                     <span>{{ auth_role }}{% if auth_group %} / {{ auth_group }}{% endif
                         %}</span></span>
+                {% if auth_role in ('admin', 'lead') %}
+                <a href="/studio"
+                    style="font-size:11px;color:var(--accent);text-decoration:none;border:1px solid var(--accent);padding:4px 10px;border-radius:6px">Recipe Studio</a>
+                {% endif %}
                 <a href="/doc" target="_blank"
                     style="font-size:11px;color:var(--muted);text-decoration:none;border:1px solid var(--border);padding:4px 10px;border-radius:6px;transition:color .2s"
                     onmouseover="this.style.color='var(--text)'"
@@ -53,18 +60,27 @@
         <!-- Steps -->
         <div class="steps">
             <div class="step active" id="step-1" style="cursor:pointer" title="Back to start"><span
-                    class="num">1</span>Upload</div>
+                    class="num">1</span>Recipe</div>
             <div class="step-line" id="line-1"></div>
             <div class="step" id="step-2"><span class="num">2</span>Zones</div>
             <div class="step-line" id="line-2"></div>
             <div class="step" id="step-3"><span class="num">3</span>Check</div>
         </div>
 
-        <!-- ═══ STEP 1: Upload reference ═══ -->
+        <!-- ═══ STEP 1: Choose recipe ═══ -->
         <div id="panel-1" class="card">
-            <h2>Upload Reference</h2>
+            <h2>Recipes</h2>
+            <div id="tpl-list" class="tpl-grid">
+                <p style="color:var(--muted);font-size:12px">Loading...</p>
+            </div>
+            {# Kept in the DOM for every role (app.js binds to these elements);
+               hidden for operators — the server refuses ad-hoc sessions from them. #}
+            <div id="adhoc-section"{% if auth_role not in ('admin', 'lead') %} class="hidden"{% endif %}>
+            <div class="divider"></div>
+            <h2>Quick check without a recipe</h2>
             <p style="color:var(--muted);font-size:12px;margin-bottom:6px">
-                Upload one or more photos. Multiple shots will be auto-aligned and averaged.
+                For trials only: results are saved without a recipe version. To prepare a recipe for the line,
+                use <a href="/studio" style="color:var(--accent)">Recipe Studio</a>.
             </p>
             <div class="dropzone" id="dz-ref">
                 <span class="dropzone-label">Drop images here (multiple OK)</span>
@@ -101,10 +117,6 @@
                     Upload
                 </button>
             </div>
-            <div class="divider"></div>
-            <h2>Saved Templates</h2>
-            <div id="tpl-list" class="tpl-grid">
-                <p style="color:var(--muted);font-size:12px">Loading...</p>
             </div>
         </div>
 
@@ -143,13 +155,6 @@
                     style="color:var(--danger);margin-left:6px">Clear all</a>
                 <div id="subzone-chips" style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px"></div>
             </div>
-            <div class="divider"></div>
-            <h2>Save as Template</h2>
-            <div class="save-tpl-row">
-                <input type="text" id="tpl-name-input" placeholder="Template name, e.g. Module XY-300">
-                <input type="text" id="tpl-mask-input" placeholder="Barcode mask, e.g. 7334" style="max-width:130px">
-                <button class="btn btn-sm" id="btn-save-tpl" disabled>Save Template</button>
-            </div>
         </div>
 
         <!-- ═══ STEP 3: Check zones ═══ -->
@@ -159,8 +164,11 @@
                 style="margin-bottom:6px;padding:3px 8px;background:var(--accent-dim);border:1px solid var(--accent);border-radius:3px;font-size:12px;display:inline-flex;gap:6px;align-items:center">
                 <span style="color:var(--accent)">Recipe:</span>
                 <strong id="recipe-badge-name" style="color:var(--text-bright)"></strong>
+                <span id="recipe-badge-version" style="color:var(--accent);font-family:var(--mono)"></span>
                 <span id="recipe-badge-mask" style="color:var(--muted);font-family:var(--mono)"></span>
             </div>
+            <p id="recipe-notes" class="hidden"
+                style="margin:0 0 8px;padding:4px 8px;border-left:2px solid var(--accent);font-size:12px;color:var(--text)"></p>
 
             <div class="serial-inspect-row">
                 <!-- ── Serial number photo ── -->
@@ -418,71 +426,7 @@
     <script src="/static/app.js?v={{ v }}"></script>
 
 
-    <!-- ═══ Template Editor Modal ═══ -->
-    <div id="tpl-editor-overlay" class="tpl-editor-overlay hidden">
-        <div class="tpl-editor">
-            <button class="te-close" id="te-close">&times;</button>
-            <h2 id="te-title">Edit Template</h2>
-            <div class="te-row">
-                <div class="te-col-img">
-                    <div class="te-field">
-                        <label>Name</label>
-                        <input type="text" id="te-name">
-                    </div>
-                    <div class="te-field">
-                        <label>Barcode mask</label>
-                        <input type="text" id="te-mask" placeholder="e.g. 7334">
-                    </div>
-                    <div class="zoom-bar" id="te-zoom-bar">
-                        <button class="zoom-btn" id="te-zoom-out" title="Zoom out">−</button>
-                        <span class="zoom-level" id="te-zoom-level">100%</span>
-                        <button class="zoom-btn" id="te-zoom-in" title="Zoom in">+</button>
-                        <button class="zoom-btn" id="te-zoom-reset" title="Reset zoom">⟳</button>
-                        <span style="font-size:10px;color:var(--muted);margin-left:4px">Ctrl+scroll = zoom</span>
-                    </div>
-                    <div class="te-canvas-wrap">
-                        <canvas id="te-canvas"></canvas>
-                    </div>
-                    <p id="te-draw-hint" style="font-size:11px;color:var(--muted);margin:0">
-                        Draw rectangles to add zones. Click ⌖ to place anchors.
-                    </p>
-                    <div id="te-anchor-hint" class="te-hint hidden">
-                        ⌖ Click on image to place anchors (max 2). <a href="#" id="te-anchor-done"
-                            style="color:var(--warn);margin-left:4px">Done</a>
-                        <a href="#" id="te-anchor-clear" style="color:var(--danger);margin-left:4px">Clear</a>
-                    </div>
-                    <div id="te-subzone-hint" class="te-hint hidden"
-                        style="background:#ff6b6b18;border-color:#ff6b6b;color:#ff6b6b">
-                        ◻ Draw subzones inside the selected zone (max 10). <a href="#" id="te-subzone-done"
-                            style="color:#ff6b6b;margin-left:4px">Done</a>
-                        <a href="#" id="te-subzone-clear" style="color:var(--danger);margin-left:4px">Clear</a>
-                        <div id="te-subzone-chips" style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px"></div>
-                    </div>
-                </div>
-                <div class="te-col-zones">
-                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
-                        <label
-                            style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:0">Zones</label>
-                        <span id="te-zone-count"
-                            style="font-size:11px;color:var(--accent);font-family:var(--mono)"></span>
-                    </div>
-                    <ul class="te-zone-list" id="te-zone-list"></ul>
-                    <div style="margin-top:8px">
-                        <p style="font-size:11px;color:var(--muted);margin:0 0 6px">
-                            Version history
-                        </p>
-                        <div class="te-ver-list" id="te-ver-list"></div>
-                    </div>
-                    <div class="te-actions">
-                        <button class="btn" id="te-save" style="background:var(--accent)">Save changes</button>
-                        <button class="btn btn-outline" id="te-cancel">Cancel</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script src="/static/tpl-editor.js?v={{ v }}"></script>
+    <script>window.AUTH_ROLE = {{ auth_role|tojson }}; window.AUTH_GROUP = {{ (auth_group or "")|tojson }};</script>
 </body>
 
 </html>

@@ -106,16 +106,16 @@ class TestAuthRequired:
 
 class TestBruteForce:
     def test_lockout_after_max_attempts(self, client, flask_app):
-        """6 failed login attempts from same IP should trigger 429 lockout."""
+        """Exceeding _LOGIN_MAX_ATTEMPTS from the same IP triggers 429 lockout."""
         import app as app_module
 
         # Clear any existing state
         app_module._login_attempts.clear()
         app_module._login_lockouts.clear()
 
-        for i in range(5):
+        for i in range(app_module._LOGIN_MAX_ATTEMPTS):
             resp = client.post("/login", json={"key": "wrong-key"})
-            # First 4 should be 403; 5th triggers lockout and returns 429
+            # All but the last are 403; the last triggers lockout (429)
             assert resp.status_code in (
                 403, 429), f"Attempt {i+1}: {resp.status_code}"
 

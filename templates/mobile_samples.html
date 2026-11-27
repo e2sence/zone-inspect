@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Sample capture · Zone Inspect</title>
+    <link rel="stylesheet" href="/static/jbmono.css">
+    <style>
+        :root {
+            --bg: #0a0c10; --card: #111318; --bg2: #161920; --border: #1e222a; --border-light: #2a2f3a;
+            --text: #c9cdd5; --bright: #e8eaed; --muted: #6b7280; --accent: #3b82f6;
+            --ok: #2ea043; --warn: #d29922; --bad: #f85149;
+            --mono: 'JetBrains Mono', 'SF Mono', monospace;
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; }
+        body { display: flex; flex-direction: column; padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0); }
+        .top { padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--card); display: flex; flex-direction: column; gap: 6px; }
+        .top b { color: var(--bright); }
+        .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .muted { color: var(--muted); font-size: 11.5px; }
+        input { background: var(--bg2); border: 1px solid var(--border-light); color: var(--bright); font-family: var(--mono); font-size: 14px; padding: 6px 8px; border-radius: 4px; }
+        .seg { display: flex; border: 1px solid var(--border-light); border-radius: 4px; overflow: hidden; }
+        .seg button { flex: 1; padding: 8px 14px; background: var(--bg2); color: var(--muted); border: 0; font-family: var(--mono); font-size: 13px; }
+        .seg button.on.good { background: var(--ok); color: #fff; }
+        .seg button.on.defect { background: var(--bad); color: #fff; }
+        .stepper { display: flex; align-items: center; gap: 4px; }
+        .stepper button { width: 34px; height: 34px; border-radius: 4px; border: 1px solid var(--border-light); background: var(--bg2); color: var(--bright); font-size: 18px; }
+        .stepper span { min-width: 64px; text-align: center; color: var(--bright); }
+        .vf { position: relative; flex: 1; min-height: 0; background: #000; overflow: hidden; }
+        .vf video { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .vf .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 20px; color: var(--bright); background: rgba(0,0,0,.6); }
+        .vf .hud { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; justify-content: space-between; color: #fff; text-shadow: 0 1px 2px #000; font-size: 12px; }
+        .flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .15s; }
+        .bottom { padding: 10px 12px; background: var(--card); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+        .shutter { width: 68px; height: 68px; border-radius: 50%; border: 4px solid #fff; margin: 0 auto; display: block; }
+        .shutter.good { background: var(--ok); } .shutter.defect { background: var(--bad); }
+        .shutter:disabled { opacity: .4; }
+        .zones { display: flex; flex-direction: column; gap: 4px; max-height: 22vh; overflow-y: auto; }
+        .z { display: grid; grid-template-columns: 1fr auto; gap: 8px; font-size: 12px; }
+        .chip { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; border: 1px solid var(--border-light); }
+        .chip.ok { color: var(--ok); border-color: var(--ok); } .chip.warn { color: var(--warn); border-color: var(--warn); } .chip.bad { color: var(--bad); border-color: var(--bad); }
+        .result { min-height: 18px; font-size: 12px; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+
+<body>
+    <div class="top">
+        <div class="row" style="justify-content:space-between"><span><b id="recipe">…</b> <span class="muted" id="version"></span></span><span class="muted">Sample capture</span></div>
+        <div class="row">
+            <label class="muted" for="device">Phone</label>
+            <input id="device" list="phones" placeholder="e.g. iPhone 13" style="flex:1;min-width:120px" autocomplete="off">
+            <datalist id="phones"><option value="iPhone 12"><option value="iPhone 13"><option value="iPhone 14"><option value="Xiaomi 14"><option value="Xiaomi 15"><option value="Xiaomi 16"></datalist>
+        </div>
+        <div class="row" style="justify-content:space-between">
+            <div class="seg" role="group" aria-label="Sample kind">
+                <button type="button" id="k-good" class="on good">Good</button>
+                <button type="button" id="k-defect" class="defect">Defect</button>
+            </div>
+            <div class="stepper"><button type="button" id="b-dec" aria-label="Previous board">−</button><span id="board">board 1</span><button type="button" id="b-inc" aria-label="Next board">+</button></div>
+        </div>
+    </div>
+
+    <div class="vf">
+        <video id="video" playsinline muted autoplay></video>
+        <div class="hud"><span id="hud-kind">GOOD · board 1</span><span id="hud-count">0 shots</span></div>
+        <div class="flash" id="flash"></div>
+        <div class="msg" id="msg">Starting camera…</div>
+    </div>
+    <canvas id="canvas" class="hidden"></canvas>
+
+    <div class="bottom">
+        <div class="result" id="result"></div>
+        <button type="button" class="shutter good" id="shutter" aria-label="Take sample photo" disabled></button>
+        <div class="zones" id="zones"></div>
+    </div>
+
+    <script src="/static/view-guide.js"></script>
+    <script>
+        const TOKEN = new URLSearchParams(location.search).get('token') || '';
+        const $ = id => document.getElementById(id);
+        let kind = 'good', board = 1, shots = 0, busy = false;
+        let minGood = 15, minDefect = 2, summary = null;
+        const store = {
+            get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+            set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } },
+        };
+
+        // Phone name: remembered per device; Android Chrome can report the model
+        $('device').value = store.get('zi_sample_device') || '';
+        if (!$('device').value && navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
+            navigator.userAgentData.getHighEntropyValues(['model']).then(v => { if (v.model && !$('device').value) $('device').value = v.model; }).catch(() => {});
+        } else if (!$('device').value && /iPhone/.test(navigator.userAgent)) {
+            $('device').placeholder = 'iPhone model, e.g. iPhone 13';
+        }
+        $('device').addEventListener('change', () => { store.set('zi_sample_device', $('device').value.trim()); updateShutter(); });
+        $('device').addEventListener('input', updateShutter);
+
+        function setKind(k) {
+            kind = k;
+            $('k-good').classList.toggle('on', k === 'good');
+            $('k-defect').classList.toggle('on', k === 'defect');
+            $('shutter').className = 'shutter ' + k;
+            hud(); renderZones();
+        }
+        $('k-good').addEventListener('click', () => setKind('good'));
+        $('k-defect').addEventListener('click', () => setKind('defect'));
+        $('b-dec').addEventListener('click', () => { board = Math.max(1, board - 1); hud(); });
+        $('b-inc').addEventListener('click', () => { board += 1; hud(); });
+
+        function hud() {
+            $('board').textContent = 'board ' + board;
+            $('hud-kind').textContent = `${kind.toUpperCase()} · board ${board}`;
+            $('hud-count').textContent = `${shots} shot${shots === 1 ? '' : 's'}`;
+        }
+        function updateShutter() {
+            const noName = !$('device').value.trim();
+            $('shutter').disabled = busy || noName || !$('video').videoWidth;
+            if (noName && !busy) $('result').innerHTML = '<span class="chip warn">Phone</span> Enter the phone model above to start.';
+            else if ($('result').textContent.startsWith('Phone')) $('result').textContent = '';
+        }
+
+        function renderZones() {
+            if (!summary) return;
+            const need = kind === 'good' ? minGood : minDefect;
+            $('zones').innerHTML = summary.zones.map(z => {
+                const have = kind === 'good' ? z.good : z.defect;
+                return `<div class="z"><span>${esc(z.label)}</span><span class="chip ${have >= need ? 'ok' : 'warn'}">${have}/${need}</span></div>`;
+            }).join('') + `<div class="muted">Phones so far: ${summary.devices.length ? summary.devices.map(esc).join(', ') : 'none'}${kind === 'defect' ? ' · label defects on the computer afterwards' : ''}</div>`;
+        }
+        function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+        async function loadStatus() {
+            const r = await fetch(`/api/mobile/${TOKEN}/sample_status`);
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.error || 'Link expired');
+            $('recipe').textContent = d.recipe;
+            $('version').textContent = `draft v${d.version}`;
+            minGood = d.min_good; minDefect = d.min_defect; summary = d.summary;
+            if (!d.has_reference) throw new Error('This recipe has no reference image yet. Add it in Recipe Studio first.');
+            renderZones();
+        }
+
+        async function startCamera() {
+            try {
+                // Same capture settings as the inspection page, so samples look like line photos
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+                const track = stream.getVideoTracks()[0];
+                const caps = track.getCapabilities ? track.getCapabilities() : {};
+                if (caps.focusMode && caps.focusMode.includes('continuous')) {
+                    await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+                }
+                $('video').srcObject = stream;
+                await $('video').play();
+                $('msg').classList.add('hidden');
+                updateShutter();
+                // Viewpoint hint: typical viewpoint of the good samples taken so far; shows the
+                // zone in the frame that is furthest from it
+                if (window.ViewGuide) ViewGuide({
+                    video: $('video'), container: document.querySelector('.vf'),
+                    url: `/api/mobile/${TOKEN}/sample_guide`, paused: () => busy,
+                    pick: d => {
+                        const inFrame = d.zones.filter(z => z.in_frame);
+                        if (!inFrame.length) return null;
+                        return inFrame.reduce((a, z) => (z.view_dev ?? -1) > (a.view_dev ?? -1) ? z : a);
+                    },
+                }).start();
+            } catch (e) {
+                $('msg').textContent = 'Camera unavailable. Allow camera access for this site and reload.';
+            }
+        }
+
+        function captureFrame() {
+            const video = $('video'), canvas = $('canvas');
+            const vw = video.videoWidth, vh = video.videoHeight;
+            const dispW = video.clientWidth, dispH = video.clientHeight;
+            const videoRatio = vw / vh, dispRatio = dispW / dispH;
+            let sx = 0, sy = 0, sw = vw, sh = vh;
+            if (videoRatio > dispRatio) { sw = Math.round(vh * dispRatio); sx = Math.round((vw - sw) / 2); }
+            else { sh = Math.round(vw / dispRatio); sy = Math.round((vh - sh) / 2); }
+            const maxDim = 2048;
+            let outW = sw, outH = sh;
+            if (Math.max(sw, sh) > maxDim) { const s = maxDim / Math.max(sw, sh); outW = Math.round(sw * s); outH = Math.round(sh * s); }
+            canvas.width = outW; canvas.height = outH;
+            canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, outW, outH);
+            return new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error('Capture failed')), 'image/jpeg', 0.92));
+        }
+
+        $('shutter').addEventListener('click', async () => {
+            if (busy) return;
+            busy = true; updateShutter();
+            $('flash').style.opacity = '.7'; setTimeout(() => { $('flash').style.opacity = '0'; }, 120);
+            $('result').textContent = 'Uploading…';
+            try {
+                const blob = await captureFrame();
+                const fd = new FormData();
+                fd.append('photo', blob, 'sample.jpg');
+                fd.append('kind', kind);
+                fd.append('device', $('device').value.trim());
+                fd.append('board', String(board));
+                const r = await fetch(`/api/mobile/${TOKEN}/sample`, { method: 'POST', body: fd });
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.error || 'Upload failed');
+                shots += 1; hud();
+                summary = d.summary; renderZones();
+                const s = d.sample, q = s.quality || {};
+                const zl = s.visible_zones.map(i => (summary.zones[i] || {}).label || `Zone ${i + 1}`);
+                if (!s.aligned) $('result').innerHTML = '<span class="chip bad">Not aligned</span> The board was not recognised. Fill the frame with the board and retake.';
+                else if (!zl.length) $('result').innerHTML = '<span class="chip warn">No full zone</span> No zone is completely in the frame. Step back a little.';
+                else $('result').innerHTML = `<span class="chip ok">Saved</span> ${zl.map(esc).join(', ')}`;
+                if (q.level && q.level !== 'ok') $('result').innerHTML += ` <span class="chip ${q.level === 'bad' ? 'bad' : 'warn'}">${esc((q.issues || [])[0] || q.level)}</span>`;
+            } catch (e) {
+                $('result').innerHTML = `<span class="chip bad">Error</span> ${esc(e.message)}`;
+            } finally {
+                busy = false; updateShutter();
+            }
+        });
+
+        hud();
+        loadStatus().then(startCamera).catch(e => { $('msg').textContent = e.message; });
+    </script>
+</body>
+
+</html>

@@ -37,3 +37,6 @@ Thumbs.db
 # Logs
 *.log
 nohup.out
+
+# Line-system gate: local settings with an access key
+zi_check.ini

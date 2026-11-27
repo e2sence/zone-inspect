@@ -1,0 +1,25 @@
+; Copy this file to zi_check.ini (next to zi_check.py) and fill it in.
+; zi_check.ini holds an access key: do not put it in shared folders or in git.
+
+[zone-inspect]
+; Address of the Zone Inspect server, no trailing slash.
+url = https://inspect.metaprodtrace.com
+
+; Read-only API key (starts with apk_). The administrator issues one per line;
+; a key bound to a group sees only that group's inspections.
+key = apk_REPLACE_ME
+
+; Optional: accept only inspections made with this recipe (exact name).
+; Without it, the latest inspection of the serial number counts, whatever the recipe.
+;template = Board-X
+
+; Optional: ignore inspections older than this many hours.
+;max_age_hours = 24
+
+; Optional: seconds to wait for the server (default 8). Keep the test duration
+; in the line system a few seconds longer than this.
+;timeout = 8
+
+; Optional: file with trusted root certificates (PEM), for computers whose own
+; certificates are outdated. A relative path is looked up next to this file.
+;ca_file = cacert.pem

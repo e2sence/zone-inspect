@@ -40,6 +40,21 @@
         const COLORS = ['#f59e0b', '#6366f1', '#22c55e', '#ef4444', '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#06b6d4', '#84cc16'];
 
         /* ─── Utils ─── */
+        // Strictness comes from the recipe. Lead/admin may override it for
+        // trial runs; operators have no controls and the server ignores
+        // values from them anyway.
+        function sensOverride() {
+            const cb = document.getElementById('inp-sens-override');
+            if (!cb || !cb.checked) return null;
+            return { zone: document.getElementById('inp-zone-sens').value,
+                     subzone: document.getElementById('inp-subzone-sens').value };
+        }
+        const _sensCb = document.getElementById('inp-sens-override');
+        if (_sensCb) _sensCb.addEventListener('change', () => {
+            document.getElementById('inp-zone-sens').disabled = !_sensCb.checked;
+            document.getElementById('inp-subzone-sens').disabled = !_sensCb.checked;
+        });
+
         function toast(msg, type = 'info') {
             const t = document.createElement('div');
             t.className = 'toast ' + type;
@@ -1131,7 +1146,10 @@
 
         /* ─── Serial number detection ─── */
         let currentSerial = null;
+        // Token is per station (browser): reused across sessions so the paired
+        // phone keeps working after a template switch or page reload.
         let mobileToken = null;
+        try { mobileToken = localStorage.getItem('zi_mobile_token'); } catch (e) { }
         let mobilePollTimer = null;
 
         function unlockZoneCheck() {
@@ -1144,10 +1162,15 @@
         async function generateMobileQR() {
             if (!sessionId) return;
             try {
-                const r = await fetch(`/api/session/${sessionId}/mobile_qr`, { method: 'POST' });
+                const r = await fetch(`/api/session/${sessionId}/mobile_qr`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prev_token: mobileToken }),
+                });
                 const d = await r.json();
                 if (d.error) return;
                 mobileToken = d.token;
+                try { localStorage.setItem('zi_mobile_token', mobileToken); } catch (e) { }
 
                 const qrImg = document.getElementById('qr-image');
                 qrImg.src = 'data:image/png;base64,' + d.qr_b64;
@@ -1169,7 +1192,7 @@
 
         function startMobilePoll() {
             if (mobilePollTimer) return;
-            mobilePollTimer = setInterval(pollMobileUpdates, 5000);
+            mobilePollTimer = setInterval(pollMobileUpdates, 1500);   // cheap: in-memory queue, results are computed on upload
         }
 
         function stopMobilePoll() {
@@ -1240,9 +1263,9 @@
                 let hasMore = true;
                 let idx = 0;
                 while (hasMore) {
-                    const zSens = document.getElementById('inp-zone-sens').value;
-                    const sSens = document.getElementById('inp-subzone-sens').value;
-                    const r = await fetch(`/api/session/${sessionId}/mobile_photos/next?zone_sensitivity=${encodeURIComponent(zSens)}&subzone_sensitivity=${encodeURIComponent(sSens)}`, { method: 'POST' });
+                    const so = sensOverride();
+                    const q = so ? `?zone_sensitivity=${encodeURIComponent(so.zone)}&subzone_sensitivity=${encodeURIComponent(so.subzone)}` : '';
+                    const r = await fetch(`/api/session/${sessionId}/mobile_photos/next${q}`, { method: 'POST' });
                     if (r.status === 404) { hasMore = false; break; }
                     const d = await r.json();
                     if (d.error) { hasMore = false; break; }
@@ -1408,8 +1431,11 @@
         async function processOnePhoto(file, fileIdx, totalFiles) {
             const fd = new FormData();
             fd.append('photo', file);
-            fd.append('zone_sensitivity', document.getElementById('inp-zone-sens').value);
-            fd.append('subzone_sensitivity', document.getElementById('inp-subzone-sens').value);
+            const so = sensOverride();
+            if (so) {
+                fd.append('zone_sensitivity', so.zone);
+                fd.append('subzone_sensitivity', so.subzone);
+            }
             const r = await fetch(`/api/session/${sessionId}/check`, { method: 'POST', body: fd });
             const d = await r.json();
             if (d.error) { toast(d.error, 'error'); return; }
@@ -1950,54 +1976,37 @@
         /*  TEMPLATES                                                                      */
         /* ═══════════════════════════════════════════════════════════════════════════ */
         async function loadTemplateList() {
+            const canAuthor = window.AUTH_ROLE === 'admin' || window.AUTH_ROLE === 'lead';
             try {
                 const r = await fetch('/api/templates');
                 const d = await r.json();
                 const el = document.getElementById('tpl-list');
                 if (!d.templates.length) {
-                    el.innerHTML = '<p style="color:var(--muted);font-size:12px">No saved templates. Upload a board and define zones to create one.</p>';
+                    el.innerHTML = canAuthor
+                        ? '<p style="color:var(--muted);font-size:12px">No published recipes. Create one in <a href="/studio" style="color:var(--accent)">Recipe Studio</a>.</p>'
+                        : '<p style="color:var(--muted);font-size:12px">No recipes are published for your group yet. Ask your line lead.</p>';
                     return;
                 }
                 el.innerHTML = '';
+                const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
                 d.templates.forEach(t => {
                     const card = document.createElement('div');
                     card.className = 'tpl-card';
-                    const maskBadge = t.barcode_mask ? `<span style="background:var(--accent-dim);color:var(--accent);padding:0 4px;border-radius:2px;font-size:11px;font-family:var(--mono)">${t.barcode_mask}*</span>` : '';
-                    const verBadge = t.version > 1 ? `<span style="color:var(--muted);font-size:11px">v${t.version}</span>` : '';
+                    const maskBadge = t.barcode_mask ? `<span style="background:var(--accent-dim);color:var(--accent);padding:0 4px;border-radius:2px;font-size:11px;font-family:var(--mono)">${esc(t.barcode_mask)}*</span>` : '';
                     card.innerHTML = `
-                <div style="display:flex;gap:4px;align-items:center"><span class="tpl-name">${t.name}</span>${maskBadge}${verBadge}</div>
-                <span class="tpl-meta">Zones: ${t.zone_count} • ${t.created ? t.created.slice(0, 10) : ''}</span>
+                <div style="display:flex;gap:4px;align-items:center"><span class="tpl-name">${esc(t.name)}</span>${maskBadge}<span style="color:var(--muted);font-size:11px">v${t.version}</span></div>
+                <span class="tpl-meta">Zones: ${t.zone_count}</span>
                 <div class="tpl-actions">
-                    <button class="tpl-btn load" data-id="${t.id}">Load</button>
-                    <button class="tpl-btn edit" data-id="${t.id}" data-name="${t.name}" data-mask="${t.barcode_mask || ''}">Edit</button>
-                    <button class="tpl-btn del" data-id="${t.id}">Delete</button>
+                    <button class="tpl-btn load" data-id="${esc(t.id)}">Load</button>
+                    ${canAuthor && (window.AUTH_ROLE === 'admin' || (t.group || '') === window.AUTH_GROUP) ? `<a class="tpl-btn edit" href="/studio#${esc(t.id)}" style="text-decoration:none">Studio</a>` : ''}
+                    ${!t.group ? '<span style="color:var(--muted);font-size:11px">shared</span>' : ''}
                 </div>`;
                     el.appendChild(card);
                 });
-                // Event delegation
                 el.querySelectorAll('.tpl-btn.load').forEach(btn => {
                     btn.addEventListener('click', e => { e.stopPropagation(); loadTemplate(btn.dataset.id); });
                 });
-                el.querySelectorAll('.tpl-btn.edit').forEach(btn => {
-                    btn.addEventListener('click', e => {
-                        e.stopPropagation();
-                        editTemplate(btn.dataset.id, btn.dataset.name, btn.dataset.mask);
-                    });
-                });
-                el.querySelectorAll('.tpl-btn.del').forEach(btn => {
-                    btn.addEventListener('click', async e => {
-                        e.stopPropagation();
-                        if (!confirm('Delete template?')) return;
-                        await fetch(`/api/templates/${btn.dataset.id}`, { method: 'DELETE' });
-                        toast('Template deleted', 'info');
-                        loadTemplateList();
-                    });
-                });
             } catch (e) { console.error(e); }
-        }
-
-        async function editTemplate(tid, currentName, currentMask) {
-            openTemplateEditor(tid);
         }
 
         async function loadTemplate(tid) {
@@ -2036,6 +2045,10 @@
                     // Show recipe badge
                     if (currentTemplateName) {
                         document.getElementById('recipe-badge-name').textContent = currentTemplateName;
+                        document.getElementById('recipe-badge-version').textContent = d.version ? `v${d.version}` : '';
+                        const notes = document.getElementById('recipe-notes');
+                        notes.textContent = d.operator_notes || '';
+                        notes.classList.toggle('hidden', !d.operator_notes);
                         document.getElementById('recipe-badge-mask').textContent = currentBarcodeMask ? `(mask: ${currentBarcodeMask}*)` : '';
                         document.getElementById('recipe-badge').classList.remove('hidden');
                     }
@@ -2044,30 +2057,6 @@
                 refImg.src = 'data:image/jpeg;base64,' + d.image_b64;
             } catch (e) { toast(e.message, 'error'); }
         }
-
-        // Save template button
-        document.getElementById('btn-save-tpl').addEventListener('click', async () => {
-            const name = document.getElementById('tpl-name-input').value.trim();
-            if (!name) { toast('Enter template name', 'error'); return; }
-            if (!sessionId || !zones.length) { toast('Define zones first', 'error'); return; }
-            try {
-                const mask = document.getElementById('tpl-mask-input').value.trim();
-                const r = await fetch('/api/templates', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ session_id: sessionId, name, zones, barcode_mask: mask || null }),
-                });
-                const d = await r.json();
-                if (d.error) { toast(d.error, 'error'); return; }
-                toast(`Template "${name}" saved!`, 'success');
-                document.getElementById('tpl-name-input').value = '';
-            } catch (e) { toast(e.message, 'error'); }
-        });
-
-        // Enable save-template button when zones exist and name is typed
-        document.getElementById('tpl-name-input').addEventListener('input', () => {
-            document.getElementById('btn-save-tpl').disabled = !document.getElementById('tpl-name-input').value.trim() || !zones.length;
-        });
 
         // Load template list on page load
         loadTemplateList();
@@ -2305,7 +2294,7 @@
 
             // Stats row
             const statsRow = row.querySelector('.hd-stats-row');
-            const recipeStat = r.template_name ? `<div class="hd-stat-card"><div class="hd-stat-val" style="color:var(--accent);font-size:11px">${r.template_name}</div><div class="hd-stat-label">Recipe</div></div>` : '';
+            const recipeStat = r.template_name ? `<div class="hd-stat-card"><div class="hd-stat-val" style="color:var(--accent);font-size:11px">${r.template_name}${r.recipe_version ? ' v' + r.recipe_version : ''}</div><div class="hd-stat-label">Recipe</div></div>` : '';
             // Extract sensitivity from first zone that has it
             const _sensZone = zones.find(z => z.zone_sensitivity != null);
             const _zSens = _sensZone ? _sensZone.zone_sensitivity.toFixed(2) : null;
@@ -2512,7 +2501,7 @@
                     <div class="pp-meta">
                         <div class="pp-meta-cell"><span class="pp-meta-label">Serial</span><span class="pp-meta-val">${r.serial || '—'}</span></div>
                         <div class="pp-meta-cell"><span class="pp-meta-label">Type</span><span class="pp-meta-val">${r.serial_type || '—'}</span></div>
-                        <div class="pp-meta-cell"><span class="pp-meta-label">Recipe</span><span class="pp-meta-val">${r.template_name || '—'}</span></div>
+                        <div class="pp-meta-cell"><span class="pp-meta-label">Recipe</span><span class="pp-meta-val">${r.template_name || '—'}${r.recipe_version ? ' v' + r.recipe_version : ''}</span></div>
                         <div class="pp-meta-cell"><span class="pp-meta-label">Date</span><span class="pp-meta-val">${ts}</span></div>
                         <div class="pp-meta-cell"><span class="pp-meta-label">Operator</span><span class="pp-meta-val">${r.operator || '—'}</span></div>
                         <div class="pp-meta-cell"><span class="pp-meta-label">Zones</span><span class="pp-meta-val">${r.zones_checked || 0}/${r.zones_total || 0}</span></div>

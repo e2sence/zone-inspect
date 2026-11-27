@@ -275,7 +275,8 @@
             margin-top: 0
         }
 
-        .section-body ul {
+        .section-body ul,
+        .section-body ol {
             margin: 4px 0 6px 16px;
             color: var(--text);
         }
@@ -484,119 +485,168 @@
                         <p>Open the application URL. Enter your access key on the login page. The key is provided by the
                             administrator and maps to your operator name. The session persists for 30 days.</p>
                         <h4>Interface Overview</h4>
-                        <p>The system uses a 3-step wizard:</p>
+                        <p>Operators work on the inspection screen:</p>
                         <ul>
-                            <li><strong>Step 1 — Upload:</strong> upload a reference photo or load a saved
-                                template.</li>
-                            <li><strong>Step 2 — Zones:</strong> draw inspection zones on the reference image.</li>
-                            <li><strong>Step 3 — Check:</strong> take zone photos, run analysis, review results.</li>
+                            <li><strong>Step 1 — Recipe:</strong> choose a published recipe (name, version, barcode
+                                mask).</li>
+                            <li><strong>Step 3 — Check:</strong> scan the serial number, take zone photos, review
+                                results and save.</li>
                         </ul>
+                        <p>Leads and admins also have <strong>Recipe Studio</strong> (link in the header) to prepare
+                            recipes, and a quick check without a recipe (Step 2 — Zones) for trials.</p>
                         <p>Click the <strong>Step 1</strong> indicator at any time to reset and start over.</p>
-                        <h4>Sensitivity Controls</h4>
-                        <p>In the header, two inputs control detection strictness:</p>
-                        <ul>
-                            <li><strong>Zone</strong> (0.00–2.00) — sensitivity for zone-level defect detection.
-                                Default: 0.50.</li>
-                            <li><strong>Subzone</strong> (0.00–2.00) — sensitivity for subzone-level analysis. Default:
-                                0.51.</li>
-                        </ul>
-                        <p>Higher values = stricter detection (more defects flagged). Lower values = more lenient.</p>
+                        <h4>Strictness</h4>
+                        <p>How strict the check is belongs to the recipe (zone and subzone values 0.00–2.00, defaults
+                            0.50 / 0.51; higher = stricter). Operators cannot change it. Leads and admins can tick
+                            <strong>Override</strong> in the header for a trial run; without the tick the recipe's
+                            values are used.</p>
                     </div>
                 </div>
 
-                <!-- 2. Uploading Reference -->
+                <!-- 2. Reference Image -->
                 <div class="section" data-search>
                     <div class="section-hdr" onclick="toggleSection(this)">
                         <span class="section-num">2</span>
-                        <span class="section-title">Uploading a Reference Image</span>
+                        <span class="section-title">Reference Image</span>
                         <span class="section-arrow">&#9654;</span>
                     </div>
                     <div class="section-body">
-                        <h4>Single Image</h4>
-                        <p>Drag and drop (or click to browse) a single photo of the reference assembly into the upload
-                            area.
-                            Supported formats: PNG, JPG, JPEG, BMP, WebP.</p>
-                        <h4>Multi-Image Blending</h4>
-                        <p>Upload 2+ photos of the same object. The system shows a blending panel:</p>
-                        <ul>
-                            <li><strong>Manual blend:</strong> adjust X/Y offset and Scale sliders for each image. Click
-                                "Blend (manual)" to merge.</li>
-                            <li><strong>Auto-align (SIFT):</strong> automatically aligns images using feature matching,
-                                then averages. Best for slightly shifted shots.</li>
-                            <li><strong>Readjust:</strong> go back to the slider interface after viewing the result.
-                            </li>
-                        </ul>
-                        <p>Multi-image blending reduces noise and produces a cleaner reference.</p>
+                        <p>The reference image belongs to a recipe and is set in <strong>Recipe Studio</strong>, step 2
+                            (see section 3). Each recipe version keeps its own reference.</p>
+                        <h4>Quality check</h4>
+                        <p>Every reference is checked for sharpness, exposure and resolution. A red result blocks
+                            publishing; yellow is a warning. Use a sharp, evenly lit photo of a known-good board, taken
+                            the way operators will shoot.</p>
+                        <h4>Blending several photos</h4>
+                        <p>"Blend several photos…" aligns 2+ shots of the same board (SIFT, with barcode/QR anchors as a
+                            fallback) and averages them. This reduces noise and glare.</p>
+                        <h4>Quick check without a recipe (lead / admin)</h4>
+                        <p>The inspection screen still has an upload area for trials: upload a reference, draw zones,
+                            check. Such results have no recipe version. Operators do not see this area.</p>
                     </div>
                 </div>
 
-                <!-- 3. Templates -->
-                <div class="section" data-search>
+                <!-- 3. Recipes & Recipe Studio -->
+                <div class="section" data-search id="studio">
                     <div class="section-hdr" onclick="toggleSection(this)">
                         <span class="section-num">3</span>
-                        <span class="section-title">Templates</span>
+                        <span class="section-title">Recipes &amp; Recipe Studio</span>
                         <span class="section-arrow">&#9654;</span>
                     </div>
                     <div class="section-body">
-                        <h4>Saved Templates</h4>
-                        <p>Templates store the reference image + zone layout for reuse. They appear as cards in Step 1
-                            with name, barcode mask, version number, zone count, and creation date.</p>
-                        <h4>Load</h4>
-                        <p>Click "Load" on a template card to jump directly to Step 3 (inspection) with all zones
-                            pre-configured. A "Recipe" badge appears showing the template name.</p>
-                        <h4>Save as Template</h4>
-                        <p>In Step 2 after drawing zones, enter a name and optional barcode mask, then click "Save
-                            Template". The reference image is stored in cloud storage (R2).</p>
-                        <h4>Edit Template</h4>
-                        <p>Click "Edit" on a template card to open the full-screen template editor. You can:</p>
+                        <p>A <span class="kw">recipe</span> is everything needed to inspect one product: reference
+                            image, zones and subzones, strictness, notes for operators, and samples of good and defective
+                            boards. Recipes are prepared in <strong>Recipe Studio</strong> (<code>/studio</code>,
+                            lead and admin) and used on the inspection screen.</p>
+                        <h4>Versions</h4>
+                        <p>Each recipe has versions: <span class="kw">draft</span> → <span class="kw">live</span> →
+                            <span class="kw">archived</span>. Operators always inspect with the live version. Editing
+                            a live recipe opens a new draft; the line keeps the live version until the draft is
+                            published. Any archived version can be put back on the line from the version list. Every
+                            inspection result stores the recipe version it was checked with.</p>
+                        <h4>Studio steps</h4>
                         <ul>
-                            <li>Add, rename, delete, and reorder zones (drag the handle).</li>
-                            <li>Draw anchor points and subzones (see below).</li>
-                            <li>Change template name and barcode mask.</li>
-                            <li>Zoom the canvas: <span class="kbd">Ctrl</span>+scroll or +/- buttons (100%–800%).</li>
+                            <li><strong>1 Details:</strong> name, barcode mask, shooting plan (zone by zone or whole
+                                board), notes for operators, strictness.</li>
+                            <li><strong>2 Reference:</strong> see section 2.</li>
+                            <li><strong>3 Zones:</strong> see section 4.</li>
+                            <li><strong>4 Good samples:</strong> photos of known-good boards.</li>
+                            <li><strong>5 Defect samples:</strong> photos of boards with known defects, each labelled
+                                with a box.</li>
+                            <li><strong>6 Calibrate:</strong> builds the model of normal variation and shows the
+                                report (see below).</li>
+                            <li><strong>7 Publish:</strong> shows what blocks publishing and makes the draft live.</li>
                         </ul>
-                        <h4>Versioning</h4>
-                        <p>Click "Save changes" to create a new version. Previous versions are archived and visible in
-                            the sidebar. Click any older version to restore it (creates a new version).</p>
-                        <h4>Delete Template</h4>
-                        <p>Click "Delete" on the template card. Confirmation required.</p>
-                        <h4>Barcode Mask</h4>
-                        <p>A prefix string (e.g. "7334") that validates scanned serial numbers. If the scanned code does
-                            not start with this mask, a "Mask mismatch" warning appears during inspection.</p>
+                        <h4>Samples</h4>
+                        <p><strong>Keep the viewpoint consistent.</strong> Tall parts (capacitors, relays) look
+                            different from different angles, and no alignment can undo that. Shoot the samples the way
+                            operators will shoot the boards, all from about the same position and angle. The reference
+                            itself may be shot at an angle; what matters is that photos are similar to the good samples.
+                            Calibration measures, for every zone, how far each photo's viewpoint is from the typical
+                            viewpoint of the good samples, and lists those more than 20° away. While shooting samples, the
+                            phone shows the same measure live (see "Viewpoint hint" in the mobile section).</p>
+                        <p>Photograph boards the way operators will: hand-held, normal light. Connect a phone with the
+                            QR code in step 4/5 (the phone uses the same camera settings as inspection), or upload from
+                            a computer. Each photo is aligned to the reference; the card shows which zones are fully in
+                            the frame and any quality problem. Name the phone model: samples must come from different
+                            phones. Exclude a photo to keep it without counting it.</p>
+                        <p>For defect samples, open <strong>Label</strong> and draw a box around each defect on the
+                            aligned photo; zone and subzone are detected from the box. Labels survive later zone
+                            edits. Defect types: missing, wrong part, shifted, rotated, contamination, damage,
+                            other.</p>
+                        <h4>Calibration</h4>
+                        <p>Click <strong>Calibrate</strong> in step 6. For every zone the system learns what normal
+                            variation looks like from the good samples (differences between boards, phones, light) and
+                            checks each defect sample against it. Every good sample is compared with all the others, so
+                            the report shows how many false alarms to expect on good boards; a defect is
+                            <span class="kw">caught</span> when its score is above the OK limit, and the report shows
+                            whether the strongest deviation lies inside the box you drew.</p>
+                        <p>The score shows how unusual the most unusual spot of the zone is compared with the good
+                            samples; about 1 is typical. The report is a table: one row per zone with its subzones below.
+                            Each zone has its own <strong>OK limit</strong>: type it, or pick a preset: <em>No false
+                            alarms</em> (just above the worst good sample), <em>Catch all defects</em> (just below the
+                            weakest defect) or <em>Middle</em>. The counts update at once; then <strong>Save
+                            limits</strong>. Explanations are behind the <strong>?</strong> buttons; thumbnails open
+                            large on click. By default
+                            the limit is the worst good sample × 1.10. Between the OK limit and 1.25 × that limit the
+                            result is WARN, above it DEFECT. Subzones follow their zone's limit.</p>
+                        <p>Under each zone the report lists samples worth a second look: good samples shot from a
+                            different angle than most good samples or scoring far above them, and defect samples shot
+                            from a different angle (their score mixes the angle and the defect). One unusual good photo
+                            raises the limit for the whole zone; exclude it if it does not show the zone the usual way,
+                            then recalibrate. During inspection, a non-OK verdict on a photo taken from an unusual angle
+                            suggests a retake. Changing samples,
+                            zones or the reference makes the calibration out of date: recalibrate before
+                            publishing.</p>
+                        <h4>Requirements for publishing</h4>
+                        <ul>
+                            <li>At least 15 good samples for every zone.</li>
+                            <li>At least 2 defect samples for every zone, and 1 for every critical subzone.</li>
+                            <li>Samples from at least 2 different phones.</li>
+                            <li>A reference that passed the quality check, and at least one zone.</li>
+                            <li>An up-to-date calibration.</li>
+                        </ul>
+                        <p>If some defect samples pass as OK at the chosen limits, the lead can still publish: tick
+                            that the misses are accepted and give a reason. The reason is kept with the version and shown
+                            in the version list. Fewer than 3 different good boards and samples shot from an unusual
+                            angle are warnings. A lead publishes on their own once nothing blocks; an admin may publish
+                            with unmet requirements.</p>
+                        <h4>Changing the reference</h4>
+                        <p>Samples are tied to the reference they were aligned to. After a new reference, re-align
+                            them with one click in step 4; until then they are not counted.</p>
+                        <h4>Shared recipes</h4>
+                        <p>A recipe without a group is shared: operators of every group can inspect with it. Only
+                            admins edit shared recipes in Studio.</p>
+                        <h4>Barcode mask</h4>
+                        <p>A prefix (e.g. "7334") that validates scanned serial numbers. If the scanned code does not
+                            start with it, a "Mask mismatch" warning appears during inspection.</p>
                     </div>
                 </div>
 
-                <!-- 4. Drawing Zones -->
+                <!-- 4. Inspection Zones -->
                 <div class="section" data-search>
                     <div class="section-hdr" onclick="toggleSection(this)">
                         <span class="section-num">4</span>
-                        <span class="section-title">Drawing Inspection Zones</span>
+                        <span class="section-title">Inspection Zones</span>
                         <span class="section-arrow">&#9654;</span>
                     </div>
                     <div class="section-body">
-                        <h4>Draw Zones</h4>
-                        <p>In Step 2, click and drag on the reference image to draw rectangular zones. Each zone is
-                            auto-labeled ("Zone 1", "Zone 2", etc.) and color-coded.</p>
-                        <h4>Zone Controls</h4>
-                        <ul>
-                            <li><strong>Rename:</strong> edit the text field on a zone chip.</li>
-                            <li><strong>Select:</strong> click the color dot to highlight the zone on the canvas.</li>
-                            <li><strong>Delete:</strong> click X on the zone chip.</li>
-                            <li><strong>Undo last / Clear all:</strong> buttons below the canvas.</li>
-                        </ul>
-                        <h4>Anchor Points</h4>
-                        <p>Click the crosshair icon on a zone chip to enter anchor mode. Place up to 2 anchor points on
-                            or near the zone. Anchors provide alignment guidance on the mobile camera — the phone shows
-                            where to position the board relative to detected features.</p>
-                        <h4>Subzones</h4>
-                        <p>Click the square icon on a zone chip to enter subzone mode. Draw up to 10 smaller rectangles
-                            inside the zone. Subzones trigger a separate, stricter analysis pass. Each subzone has its
-                            own status, defect %, and images. The zone's overall status = the worst status among all its
-                            subzones.</p>
-                        <h4>Canvas Zoom</h4>
-                        <p><span class="kbd">Ctrl</span>+scroll or use +/- buttons. Range: 100%–800%.</p>
-                        <h4>Save & Start</h4>
-                        <p>Click "Save zones & start check" to lock zones and proceed to Step 3.</p>
+                        <p>Zones are drawn in Recipe Studio, step 3, on the recipe's reference image. Click
+                            <strong>Save zones</strong> to store them in the draft.</p>
+                        <h4>Draw zones</h4>
+                        <p>Click and drag on the reference image. Each zone is labelled ("Zone 1", "Zone 2"…) and
+                            colour-coded. Rename it in the zone list, drag the handle to reorder, × to delete.</p>
+                        <h4>Anchor points</h4>
+                        <p>Click the crosshair in the zone list and place up to 2 anchors. On the phone they help the
+                            operator position the board.</p>
+                        <h4>Subzones and critical subzones</h4>
+                        <p>Click the square icon and draw up to 10 rectangles inside the zone. Subzones get a separate,
+                            stricter analysis; the zone status is the worst of the zone and its subzones. Tick
+                            <strong>critical</strong> where any deviation is a defect (a connector pin, a polarised
+                            part): every critical subzone needs its own defect sample before publishing. The optional
+                            "sens" field sets strictness for that subzone only.</p>
+                        <h4>Canvas zoom</h4>
+                        <p><span class="kbd">Ctrl</span>+scroll or the +/- buttons, 100%–800%.</p>
                     </div>
                 </div>
 
@@ -640,6 +690,17 @@
                         <h4>Subzone Analysis</h4>
                         <p>If the zone has subzones defined, each subzone is analyzed separately with stricter
                             thresholds. The zone status = worst of (zone result, all subzone results).</p>
+                        <h4>Calibrated recipes</h4>
+                        <p>A recipe published with a calibration is inspected with its model of normal variation: the
+                            zone is found from the photo's alignment to the reference (no similarity threshold), and the
+                            result is OK / WARN / DEFECT from the calibrated limits. The heatmap shows where the photo
+                            differs from all good samples. Parts of the zone outside the photo are ignored; at least 90%
+                            of the zone must be in the frame. Recipes without calibration are inspected by comparison
+                            with the reference as before.</p>
+                        <h4>Strictness and recipe version</h4>
+                        <p>Thresholds come from the recipe's strictness (see section 1). The recipe badge shows the
+                            version in use, and the lead's notes for operators appear under it. Each saved result
+                            stores the recipe version.</p>
                         <h4>Result Display</h4>
                         <p>After each check: 5 images (input, reference, extracted, defect map, heatmap), statistics
                             (score, SSIM, defect %), a bar chart of all zone scores, and subzone details if applicable.
@@ -708,14 +769,22 @@
                         <h4>Zone Photos</h4>
                         <p>The "Zone" tab shows which zone to photograph next. Navigate between zones with left/right
                             arrows.</p>
+                        <h4>Viewpoint hint</h4>
+                        <p>While a zone is being framed, the bottom of the viewfinder shows a live hint: whether the
+                            zone is fully in the frame and, for a calibrated recipe, how far the viewpoint is from the
+                            typical viewpoint of the recipe's good samples. Green: up to 10°; yellow: up to 20°; red:
+                            more. For yellow and red an arrow shows which way to move the phone. It is only a hint;
+                            capturing is never blocked. The phone of a lead collecting samples in Recipe Studio shows the
+                            same hint, measured against the good samples taken so far (from 3 of them per zone). With
+                            many phones framing at once the hints update less often, so that inspections stay fast.</p>
                         <h4>Anchor Alignment</h4>
                         <p>If anchor points are defined for the zone, the camera feed shows dashed guide circles at
                             target positions. Real-time template matching detects anchors in the live video. When
                             aligned (solid green circles + checkmark), press "Capture Zone".</p>
                         <h4>Capture & Upload</h4>
-                        <p>Press "Capture Zone" to take a photo. A shutter sound plays. The photo is queued for the
-                            desktop, which processes it automatically (polls every 5 seconds). Multiple photos can also
-                            be uploaded from the gallery.</p>
+                        <p>Press "Capture Zone" to take a photo. A shutter sound plays. The photo is checked as soon
+                            as it is uploaded: the verdict appears on the phone and the full result on the desktop (polls
+                            every 1.5 seconds). Multiple photos can also be uploaded from the gallery.</p>
                         <h4>Mobile Actions</h4>
                         <ul>
                             <li><strong>Skip -> New SN:</strong> save current result and start a new board from mobile.
@@ -912,6 +981,29 @@ curl -s -H "X-Auth-Key: $KEY" \
                         <pre># 5. Without a key — expect 401
 curl -s "$HOST/api/v1/results"
 # {"error": "Unauthorized"}</pre>
+                        <h4>Verdict by Serial Number</h4>
+                        <p><code>GET /api/v1/verdict?serial={serial}</code></p>
+                        <p>Answers one question: did the <b>latest</b> saved inspection of this board pass?
+                            The serial must match exactly (letter case and surrounding spaces are ignored).
+                            Optional filters: <code>template</code> (exact recipe name) and
+                            <code>max_age_hours</code> (ignore older inspections).</p>
+                        <ul>
+                            <li><code>"verdict": "pass"</code> — every zone of the recipe was checked and is OK
+                                (the operator's decisions are taken into account)</li>
+                            <li><code>"verdict": "fail"</code> — <code>reason</code> is <code>defect</code>,
+                                <code>warn</code> (a warning nobody decided on) or <code>incomplete</code>
+                                (unchecked zones)</li>
+                            <li><code>"verdict": "not_inspected"</code> — no saved inspection for this serial</li>
+                        </ul>
+                        <p>The answer also has <code>problem_zones</code>, <code>template</code>,
+                            <code>operator</code>, <code>timestamp</code>, <code>inspections</code> (how many
+                            times this serial was inspected) and <code>url</code> — a page with the result
+                            for people (<code>/r/{result_id}</code>, needs a normal login).</p>
+                        <pre>curl -H "X-Auth-Key: apk_..." \
+  "https://your-host/api/v1/verdict?serial=SN-12345"</pre>
+
+                        <p>A ready-made script that turns this verdict into an exit code for a line system
+                            is described in section 13, <b>Line System Integration</b>.</p>
                     </div>
                 </div>
 
@@ -929,28 +1021,30 @@ curl -s "$HOST/api/v1/results"
                         <table style="width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:13px">
                             <tr style="border-bottom:1px solid var(--border)">
                                 <td style="padding:4px 8px;color:var(--accent)">admin</td>
-                                <td style="padding:4px 8px">Full access to everything. No group restriction. Can manage
-                                    all templates, view all results, clear history.</td>
+                                <td style="padding:4px 8px">Full access to everything. No group restriction. Edits
+                                    all recipes in Recipe Studio, including shared ones; may publish a recipe with unmet
+                                    requirements; views all results, clears history.</td>
                             </tr>
                             <tr style="border-bottom:1px solid var(--border)">
                                 <td style="padding:4px 8px;color:var(--accent)">lead</td>
-                                <td style="padding:4px 8px">Belongs to a group. Can create, edit, delete, and restore
-                                    templates (own group + shared). Views results of own group only.</td>
+                                <td style="padding:4px 8px">Belongs to a group. Prepares, publishes and rolls back
+                                    recipes of their group in Recipe Studio; may override strictness for trial runs.
+                                    Views results of own group only.</td>
                             </tr>
                             <tr>
                                 <td style="padding:4px 8px;color:var(--accent)">operator</td>
-                                <td style="padding:4px 8px">Belongs to a group. Can use templates (own group + shared)
-                                    and run inspections. Cannot create/edit/delete templates. Views results of own group
-                                    only.</td>
+                                <td style="padding:4px 8px">Belongs to a group. Inspects with published recipes (own
+                                    group + shared) using the recipe's strictness. No Recipe Studio, no ad-hoc
+                                    references. Views results of own group only.</td>
                             </tr>
                         </table>
 
                         <p><span class="kw">Groups</span></p>
                         <p>Each non-admin user belongs to a <span class="kw">group</span> (e.g. "line1", "line2").
                             Groups isolate data:</p>
-                        <p>-- Templates with a group are visible only to that group's members.<br>
-                            -- Templates with no group (empty) are <span class="kw">shared</span> -- visible to
-                            everyone.<br>
+                        <p>-- Recipes with a group are visible only to that group's members.<br>
+                            -- Recipes with no group are <span class="kw">shared</span>: every group can inspect with
+                            them; only admins edit them.<br>
                             -- Inspection results are strictly filtered by group.<br>
                             -- Admin sees everything regardless of group.</p>
 
@@ -980,8 +1074,178 @@ curl -s "$HOST/api/v1/results"
     }
   }
 }</pre>
-                        <div class="note">Admin users have no "group" field. Templates saved by admin have empty group
-                            (shared). Lead can set group when saving templates.</div>
+                        <div class="note">Admin users have no "group" field. A lead's recipes get the lead's group; an
+                            admin chooses the group when creating a recipe (empty = shared).</div>
+                    </div>
+                </div>
+
+                <!-- 13. Line System Integration -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">13</span>
+                        <span class="section-title">Line System Integration</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <div class="note">For a line system (MES) that cannot call Zone Inspect directly, but at the
+                            end of an operation can scan the serial number, run a program with it and keep
+                            the program's output as the operation log.</div>
+                        <h4>How It Works</h4>
+                        <ol>
+                            <li>The operator inspects the board in Zone Inspect as usual and <b>saves</b> the result.
+                                The serial number is read from the board during the inspection.</li>
+                            <li>At the end of the operation the line system scans the serial number and runs
+                                <code>zi_check.py</code> with it.</li>
+                            <li>The script asks the server for the verdict of the latest inspection of this
+                                serial number, prints it and exits. The last line of the output and the exit
+                                code tell the line system whether the board may go on.</li>
+                        </ol>
+                        <p>The line system keeps the whole output, including the link to the result page.</p>
+                        <h4>What Counts as a Pass</h4>
+                        <ul>
+                            <li>Every zone of the recipe was checked and is OK. The operator's decisions count:
+                                a zone the operator accepted is OK, a zone the operator rejected is a defect.</li>
+                            <li>Only the <b>latest</b> saved inspection of the serial number counts. After a repair,
+                                inspect the board again — the new result replaces the old one.</li>
+                            <li>A warning that nobody decided on, or a result saved with unchecked zones, is
+                                <b>not</b> a pass.</li>
+                            <li>A board that was never inspected is <b>not</b> a pass, and neither is a board whose
+                                serial number was not read during the inspection.</li>
+                        </ul>
+                        <h4>Output</h4>
+                        <p>A good board:</p>
+                        <pre>ZONE-INSPECT CHECK SN=SN-12345
+VERDICT=PASS
+reason=all zones OK
+recipe=Board-X v3
+operator=ivanov
+inspected=2026-11-26T17:41:02 (UTC+8)
+zones=5/5 checked
+result=https://your-host/r/a1b2c3d4_20261126_174102_9f3a
+EXIT WITH ERRORLEVEL==0</pre>
+                        <p>A board with a defect:</p>
+                        <pre>ZONE-INSPECT CHECK SN=SN-12345
+VERDICT=FAIL
+reason=defect found
+recipe=Board-X v3
+operator=ivanov
+inspected=2026-11-26T17:41:02 (UTC+8)
+zones=5/5 checked
+zone IC U5 = DEFECT
+result=https://your-host/r/a1b2c3d4_20261126_174102_9f3a
+EXIT WITH ERRORLEVEL==1</pre>
+                        <p>The <b>last line</b> is always <code>EXIT WITH ERRORLEVEL==N</code>, and the process
+                            exit code is the same N:</p>
+                        <table style="width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:13px">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==0</td>
+                                <td style="padding:4px 8px">Inspected, every zone OK.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==1</td>
+                                <td style="padding:4px 8px">Defect, undecided warning or unfinished inspection. The <code>reason=</code> and <code>zone ...</code> lines say which.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==2</td>
+                                <td style="padding:4px 8px">No saved inspection for this serial number.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==3</td>
+                                <td style="padding:4px 8px">No answer: network, key or settings. The <code>error=</code> line says which. The board was not judged.</td>
+                            </tr>
+                        </table>
+                        <h4>Station Setup</h4>
+                        <p>Needs Python 3.7 or newer; nothing else has to be installed.</p>
+                        <ol>
+                            <li>Copy <code>zi_check.py</code> and <code>zi_check.ini.example</code> from
+                                <code>integrations/windows/</code> to a folder on the station, e.g.
+                                <code>C:\work\zone_inspect</code>.</li>
+                            <li>Rename <code>zi_check.ini.example</code> to <code>zi_check.ini</code> and fill in
+                                <code>url</code> and <code>key</code>.</li>
+                            <li>Check it by hand in a command prompt, with the serial of a board that has
+                                been inspected:
+                                <code>C:\Python37\python.exe C:\work\zone_inspect\zi_check.py SN-12345</code></li>
+                        </ol>
+                        <p><span class="kw">zi_check.ini</span></p>
+                        <pre>[zone-inspect]
+url = https://your-host
+key = apk_...
+
+;template = Board-X
+;max_age_hours = 24
+;timeout = 8
+;ca_file = cacert.pem</pre>
+                        <ul>
+                            <li><code>url</code>, <code>key</code> — server address and a read-only API key</li>
+                            <li><code>template</code> — optional: accept only inspections made with this recipe
+                                (exact name). Without it, an inspection with any recipe counts.</li>
+                            <li><code>max_age_hours</code> — optional: ignore inspections older than this</li>
+                            <li><code>timeout</code> — optional: seconds to wait for the server, 8 by default</li>
+                            <li><code>ca_file</code> — optional: file with root certificates, for computers whose
+                                own certificates are outdated</li>
+                        </ul>
+                        <div class="note"><code>zi_check.ini</code> holds an access key. Keep it on the station
+                            only; do not put it in shared folders.</div>
+                        <h4>Line System Settings</h4>
+                        <table style="width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:13px">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Executable program</td>
+                                <td style="padding:4px 8px"><code>C:\Python37\python.exe</code></td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Parameter string</td>
+                                <td style="padding:4px 8px"><code>C:\work\zone_inspect\zi_check.py {0}</code></td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Test duration</td>
+                                <td style="padding:4px 8px">15 s or more (a few seconds longer than <code>timeout</code>)</td>
+                            </tr>
+                        </table>
+                        <p><code>{0}</code> is where the line system puts the scanned serial number.
+                            A different settings file can be given as a second parameter:
+                            <code>zi_check.py {0} D:\cfg\line2.ini</code>.</p>
+                        <h4>API Key (administrator)</h4>
+                        <p>Add a read-only key to <code>auth_keys.json</code> on the server; no restart is needed.
+                            A key with a <code>group</code> sees only that group's inspections — use the group
+                            of the operators who inspect on this line.</p>
+                        <pre>"api_keys": {
+  "apk_LONG_RANDOM_STRING": {
+    "name": "MES gate, line 1",
+    "scope": "read",
+    "group": "line1"
+  }
+}</pre>
+                        <h4>If Something Goes Wrong</h4>
+                        <table style="width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:13px">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Code 2 for an inspected board</td>
+                                <td style="padding:4px 8px">The serial scanned by the line system differs from the code Zone Inspect read from the board (another barcode on the board, a prefix, a missing character). Compare with the serial shown in History. Also check that the result was saved, and that <code>template</code> / <code>max_age_hours</code> do not exclude it.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Code 2, the key has a group</td>
+                                <td style="padding:4px 8px">The board was inspected by operators of another group; the key does not see their results.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">the key is not accepted</td>
+                                <td style="padding:4px 8px">Wrong <code>key</code> in <code>zi_check.ini</code>, or the key was removed on the server.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">secure connection failed</td>
+                                <td style="padding:4px 8px">Outdated root certificates on the station. Save a current certificate bundle next to the script and set <code>ca_file</code>.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">cannot reach ... / no answer within</td>
+                                <td style="padding:4px 8px">No network route to the server or a proxy in between. Open the server address in a browser on the same station.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">settings file not found</td>
+                                <td style="padding:4px 8px"><code>zi_check.ini</code> is not next to <code>zi_check.py</code>.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">no serial number was passed</td>
+                                <td style="padding:4px 8px">The parameter string has no <code>{0}</code>, or the scan was empty.</td>
+                            </tr>
+                        </table>
                     </div>
                 </div>
 
@@ -1085,25 +1349,22 @@ curl -s "$HOST/api/v1/results"
                         <p>Откройте URL приложения. На странице входа введите ключ доступа, выданный администратором.
                             Ключ привязан к имени оператора. Сеанс сохраняется 30 дней.</p>
                         <h4>Обзор интерфейса</h4>
-                        <p>Система работает в 3 шага:</p>
+                        <p>Операторы работают на экране инспекции:</p>
                         <ul>
-                            <li><strong>Шаг 1 — Загрузка:</strong> загрузка эталонного фото или выбор сохранённого
-                                шаблона.</li>
-                            <li><strong>Шаг 2 — Зоны:</strong> рисование зон инспекции на эталонном изображении.</li>
-                            <li><strong>Шаг 3 — Проверка:</strong> фотографирование зон, анализ, просмотр результатов.
-                            </li>
+                            <li><strong>Шаг 1 — Recipe:</strong> выбор опубликованного рецепта (название, версия, маска
+                                штрихкода).</li>
+                            <li><strong>Шаг 3 — Check:</strong> сканирование серийного номера, фото зон, просмотр
+                                результатов и сохранение.</li>
                         </ul>
+                        <p>У ведущих и админов есть ещё <strong>Recipe Studio</strong> (ссылка в шапке) для подготовки
+                            рецептов и быстрая проверка без рецепта (Шаг 2 — Zones) для проб.</p>
                         <p>Нажатие на индикатор <strong>Шаг 1</strong> в любой момент сбрасывает сессию и возвращает к
                             началу.</p>
-                        <h4>Настройки чувствительности</h4>
-                        <p>В заголовке страницы два поля:</p>
-                        <ul>
-                            <li><strong>Zone</strong> (0.00–2.00) — чувствительность детектирования дефектов на уровне
-                                зоны. По умолчанию: 0.50.</li>
-                            <li><strong>Subzone</strong> (0.00–2.00) — чувствительность на уровне подзон. По умолчанию:
-                                0.51.</li>
-                        </ul>
-                        <p>Большее значение = строже (больше дефектов определяется). Меньшее = мягче.</p>
+                        <h4>Строгость</h4>
+                        <p>Строгость проверки задаётся в рецепте (значения для зон и подзон 0.00–2.00, по умолчанию
+                            0.50 / 0.51; больше = строже). Оператор не может её менять. Ведущий и админ могут отметить
+                            <strong>Override</strong> в шапке для пробного прогона; без отметки используются значения
+                            рецепта.</p>
                     </div>
                 </div>
 
@@ -1111,60 +1372,119 @@ curl -s "$HOST/api/v1/results"
                 <div class="section" data-search>
                     <div class="section-hdr" onclick="toggleSection(this)">
                         <span class="section-num">2</span>
-                        <span class="section-title">Загрузка эталона</span>
+                        <span class="section-title">Эталон</span>
                         <span class="section-arrow">&#9654;</span>
                     </div>
                     <div class="section-body">
-                        <h4>Одно изображение</h4>
-                        <p>Перетащите (или выберите через диалог) одно фото эталона в область загрузки. Форматы:
-                            PNG, JPG, JPEG, BMP, WebP.</p>
-                        <h4>Блендинг нескольких фото</h4>
-                        <p>Загрузите 2+ фото одного и того же объекта. Система покажет панель блендинга:</p>
-                        <ul>
-                            <li><strong>Ручной блендинг:</strong> ползунки X/Y смещение и масштаб для каждого
-                                изображения. Нажмите "Blend (manual)".</li>
-                            <li><strong>Auto-align (SIFT):</strong> автоматическое выравнивание по особым точкам, затем
-                                усреднение. Лучший вариант при небольшом сдвиге кадров.</li>
-                            <li><strong>Readjust:</strong> вернуться к ползункам после просмотра результата.</li>
-                        </ul>
-                        <p>Блендинг нескольких фото уменьшает шум и даёт более чистый эталон.</p>
+                        <p>Эталон относится к рецепту и задаётся в <strong>Recipe Studio</strong>, шаг 2 (см. раздел
+                            3). У каждой версии рецепта свой эталон.</p>
+                        <h4>Проверка качества</h4>
+                        <p>Каждый эталон проверяется на резкость, экспозицию и разрешение. Красная оценка блокирует
+                            публикацию, жёлтая — предупреждение. Используйте резкое, равномерно освещённое фото заведомо
+                            исправной платы, снятое так же, как будут снимать операторы.</p>
+                        <h4>Склейка нескольких фото</h4>
+                        <p>«Blend several photos…» выравнивает 2+ снимка одной платы (SIFT, при необходимости по
+                            штрихкоду/QR) и усредняет их. Это уменьшает шум и блики.</p>
+                        <h4>Быстрая проверка без рецепта (ведущий / админ)</h4>
+                        <p>На экране инспекции осталась область загрузки для пробных проверок: эталон, зоны, проверка.
+                            У таких результатов нет версии рецепта. Операторы эту область не видят.</p>
                     </div>
                 </div>
 
                 <!-- 3 -->
-                <div class="section" data-search>
+                <div class="section" data-search id="studio-ru">
                     <div class="section-hdr" onclick="toggleSection(this)">
                         <span class="section-num">3</span>
-                        <span class="section-title">Шаблоны</span>
+                        <span class="section-title">Рецепты и Recipe Studio</span>
                         <span class="section-arrow">&#9654;</span>
                     </div>
                     <div class="section-body">
-                        <h4>Сохранённые шаблоны</h4>
-                        <p>Шаблоны хранят эталонное изображение + разметку зон для повторного использования.
-                            Отображаются карточками в Шаге 1: имя, маска штрихкода, версия, количество зон, дата
-                            создания.</p>
-                        <h4>Загрузить шаблон</h4>
-                        <p>Нажмите "Load" на карточке — сразу переход к Шагу 3 с готовыми зонами. Появляется бейдж
-                            "Recipe" с именем шаблона.</p>
-                        <h4>Сохранить как шаблон</h4>
-                        <p>В Шаге 2, после рисования зон, введите имя и опционально маску штрихкода, нажмите "Save
-                            Template".</p>
-                        <h4>Редактирование шаблона</h4>
-                        <p>Нажмите "Edit" — откроется полноэкранный редактор. Возможности:</p>
+                        <p><span class="kw">Рецепт</span> — всё, что нужно для контроля одного изделия: эталон, зоны и
+                            подзоны, строгость, заметки для операторов и образцы исправных и бракованных плат. Рецепты
+                            готовятся в <strong>Recipe Studio</strong> (<code>/studio</code>, ведущий и админ) и
+                            используются на экране инспекции.</p>
+                        <h4>Версии</h4>
+                        <p>У рецепта есть версии: <span class="kw">черновик</span> → <span class="kw">на линии</span>
+                            → <span class="kw">архив</span>. Операторы всегда проверяют по версии на линии. Правка
+                            рецепта открывает новый черновик, а линия работает на текущей версии, пока черновик не
+                            опубликуют. Любую архивную версию можно вернуть на линию из списка версий. Каждый
+                            результат инспекции хранит номер версии рецепта.</p>
+                        <h4>Шаги Studio</h4>
                         <ul>
-                            <li>Добавление, переименование, удаление и перетаскивание зон (ручка-захват).</li>
-                            <li>Рисование якорных точек и подзон (см. ниже).</li>
-                            <li>Изменение имени и маски штрихкода.</li>
-                            <li>Масштаб холста: <span class="kbd">Ctrl</span>+scroll или кнопки +/- (100%–800%).</li>
+                            <li><strong>1 Details:</strong> название, маска штрихкода, план съёмки (по зонам или плата
+                                целиком), заметки для операторов, строгость.</li>
+                            <li><strong>2 Reference:</strong> см. раздел 2.</li>
+                            <li><strong>3 Zones:</strong> см. раздел 4.</li>
+                            <li><strong>4 Good samples:</strong> фото заведомо исправных плат.</li>
+                            <li><strong>5 Defect samples:</strong> фото плат с известными дефектами, каждый отмечен
+                                рамкой.</li>
+                            <li><strong>6 Calibrate:</strong> строит модель нормы и показывает отчёт (см. ниже).</li>
+                            <li><strong>7 Publish:</strong> показывает, что мешает публикации, и выпускает черновик на
+                                линию.</li>
                         </ul>
-                        <h4>Версионирование</h4>
-                        <p>"Save changes" создаёт новую версию. Предыдущие версии видны в боковой панели. Нажатие на
-                            старую версию восстанавливает её (создаётся новая версия).</p>
-                        <h4>Удаление шаблона</h4>
-                        <p>Кнопка "Delete" на карточке. Требуется подтверждение.</p>
+                        <h4>Образцы</h4>
+                        <p><strong>Держите ракурс одинаковым.</strong> Высокие детали (конденсаторы, реле) с разных сторон
+                            выглядят по-разному, и никакое выравнивание этого не исправит. Снимайте образцы так, как
+                            операторы будут снимать платы: примерно с одного места и под одним углом. Эталон сам может быть
+                            снят под углом; важно, чтобы снимки были похожи на хорошие образцы. Калибровка для каждой зоны
+                            измеряет, насколько ракурс снимка отличается от типичного ракурса хороших образцов, и
+                            показывает те, что отличаются больше чем на 20°. При съёмке образцов телефон показывает ту же меру
+                            вживую (см. «Подсказка ракурса» в разделе о мобильной странице).</p>
+                        <p>Снимайте так же, как будут снимать операторы: с рук, при обычном свете. Подключите телефон
+                            по QR-коду на шаге 4/5 (телефон использует те же настройки камеры, что и при инспекции) или
+                            загрузите фото с компьютера. Каждое фото выравнивается по эталону; на карточке видно, какие
+                            зоны целиком в кадре, и проблемы качества. Указывайте модель телефона: образцы должны быть с
+                            разных телефонов. «Exclude» оставляет фото, но не учитывает его.</p>
+                        <p>Для дефектных образцов откройте <strong>Label</strong> и обведите каждый дефект рамкой на
+                            выровненном фото; зона и подзона определяются по рамке. Разметка сохраняется при
+                            последующей правке зон. Типы дефектов: missing (нет компонента), wrong part (чужой),
+                            shifted (смещён), rotated (повёрнут), contamination (загрязнение), damage (повреждение),
+                            other.</p>
+                        <h4>Калибровка</h4>
+                        <p>Нажмите <strong>Calibrate</strong> на шаге 6. Для каждой зоны система узнаёт по хорошим
+                            образцам, как выглядит нормальный разброс (разные платы, телефоны, свет), и проверяет
+                            каждый дефектный образец. Каждый хороший образец сравнивается со всеми остальными, поэтому
+                            отчёт показывает, сколько ложных тревог ждать на исправных платах; дефект
+                            <span class="kw">пойман</span>, если его оценка выше порога OK, и отчёт показывает,
+                            попало ли самое сильное отклонение в нарисованную рамку.</p>
+                        <p>Оценка показывает, насколько необычно самое необычное место зоны по сравнению с хорошими
+                            образцами; около 1 — обычное значение. Отчёт — таблица: строка на зону, под ней её подзоны. У каждой
+                            зоны свой <strong>порог OK</strong>: введите число или выберите готовое значение:
+                            <em>No false alarms</em> (чуть выше худшего хорошего образца), <em>Catch all defects</em>
+                            (чуть ниже самого слабого дефекта) или <em>Middle</em> (посередине). Цифры обновляются сразу,
+                            затем <strong>Save limits</strong>. Пояснения спрятаны под кнопками <strong>?</strong>;
+                            миниатюры открываются крупно по клику. По умолчанию порог — худший хороший образец × 1.10.
+                            Между порогом OK и 1.25 × порог — WARN, выше — DEFECT. Подзоны следуют порогу своей зоны.</p>
+                        <p>Под каждой зоной отчёт показывает образцы, на которые стоит взглянуть: хорошие, снятые с
+                            другого ракурса, чем большинство хороших, или с оценкой намного выше остальных, и дефектные,
+                            снятые с другого ракурса (их оценка смешивает ракурс и дефект). Один необычный хороший снимок
+                            поднимает порог для всей зоны; исключите его, если зона на нём видна не так, как обычно, и
+                            откалибруйте заново. При инспекции к вердикту не OK для снимка с необычного ракурса
+                            добавляется совет переснять.
+                            Изменение образцов, зон или эталона делает калибровку устаревшей: перед публикацией
+                            откалибруйте заново.</p>
+                        <h4>Требования для публикации</h4>
+                        <ul>
+                            <li>Не меньше 15 хороших образцов на каждую зону.</li>
+                            <li>Не меньше 2 дефектных образцов на каждую зону и 1 на каждую критичную подзону.</li>
+                            <li>Образцы минимум с 2 разных телефонов.</li>
+                            <li>Эталон прошёл проверку качества, есть хотя бы одна зона.</li>
+                            <li>Актуальная калибровка.</li>
+                        </ul>
+                        <p>Если при выбранных порогах часть дефектных образцов проходит как OK, ведущий всё равно может
+                            опубликовать: отметить, что пропуски приняты, и указать причину. Причина сохраняется вместе с
+                            версией и видна в списке версий. Меньше 3 разных исправных плат и образцы, снятые с необычного
+                            ракурса, — предупреждения. Ведущий публикует сам, когда ничего не блокирует; админ может
+                            опубликовать и с невыполненными требованиями.</p>
+                        <h4>Смена эталона</h4>
+                        <p>Образцы привязаны к эталону, по которому выровнены. После замены эталона выровняйте их
+                            заново одной кнопкой на шаге 4; до этого они не учитываются.</p>
+                        <h4>Общие рецепты</h4>
+                        <p>Рецепт без группы — общий: по нему могут проверять операторы всех групп. Править общие
+                            рецепты в Studio может только админ.</p>
                         <h4>Маска штрихкода</h4>
-                        <p>Префикс (например "7334"), по которому валидируются сканированные серийные номера. Если код
-                            не начинается с маски — предупреждение "Mask mismatch".</p>
+                        <p>Префикс (например «7334»), по которому проверяются серийные номера. Если код не начинается с
+                            маски, при инспекции появляется предупреждение «Mask mismatch».</p>
                     </div>
                 </div>
 
@@ -1172,31 +1492,26 @@ curl -s "$HOST/api/v1/results"
                 <div class="section" data-search>
                     <div class="section-hdr" onclick="toggleSection(this)">
                         <span class="section-num">4</span>
-                        <span class="section-title">Разметка зон инспекции</span>
+                        <span class="section-title">Зоны инспекции</span>
                         <span class="section-arrow">&#9654;</span>
                     </div>
                     <div class="section-body">
+                        <p>Зоны рисуются в Recipe Studio, шаг 3, на эталоне рецепта. Нажмите <strong>Save
+                            zones</strong>, чтобы сохранить их в черновике.</p>
                         <h4>Рисование зон</h4>
-                        <p>В Шаге 2 кликните и перетащите мышь по эталонному изображению для создания прямоугольной
-                            зоны. Зоны автоматически нумеруются ("Zone 1", "Zone 2"...) и раскрашиваются.</p>
-                        <h4>Управление зонами</h4>
-                        <ul>
-                            <li><strong>Переименовать:</strong> редактируйте текстовое поле на чипе зоны.</li>
-                            <li><strong>Выбрать:</strong> нажмите на цветную точку — зона подсвечивается на холсте.</li>
-                            <li><strong>Удалить:</strong> кнопка X на чипе зоны.</li>
-                            <li><strong>Undo last / Clear all:</strong> кнопки под холстом.</li>
-                        </ul>
-                        <h4>Якорные точки (Anchors)</h4>
-                        <p>Нажмите значок прицела на чипе зоны. Поставьте до 2 якорных точек на изображении. При съёмке
-                            с мобильного камера покажет ориентиры для выравнивания объекта.</p>
-                        <h4>Подзоны (Subzones)</h4>
-                        <p>Нажмите значок квадрата на чипе. Нарисуйте до 10 прямоугольников внутри зоны. Подзоны
-                            анализируются отдельно с более строгими порогами. У каждой подзоны свой статус, % дефектов и
-                            изображения. Итоговый статус зоны = наихудший среди всех подзон.</p>
+                        <p>Кликните и протяните мышью по эталону. Зоны нумеруются («Zone 1», «Zone 2»…) и раскрашиваются.
+                            Переименование — в списке зон, порядок — перетаскиванием за ручку, удаление — ×.</p>
+                        <h4>Якорные точки</h4>
+                        <p>Нажмите значок прицела в списке зон и поставьте до 2 якорей. На телефоне они помогают
+                            оператору расположить плату.</p>
+                        <h4>Подзоны и критичные подзоны</h4>
+                        <p>Нажмите значок квадрата и нарисуйте до 10 прямоугольников внутри зоны. Подзоны
+                            анализируются отдельно и строже; статус зоны — худший из зоны и её подзон. Отметьте
+                            <strong>critical</strong> там, где любое отклонение — брак (вывод разъёма, полярный
+                            компонент): для каждой критичной подзоны перед публикацией нужен свой дефектный образец.
+                            Необязательное поле «sens» задаёт строгость только для этой подзоны.</p>
                         <h4>Масштаб холста</h4>
-                        <p><span class="kbd">Ctrl</span>+scroll или кнопки +/-. Диапазон: 100%–800%.</p>
-                        <h4>Сохранить и начать</h4>
-                        <p>Нажмите "Save zones & start check" для фиксации зон и перехода к Шагу 3.</p>
+                        <p><span class="kbd">Ctrl</span>+scroll или кнопки +/-, 100%–800%.</p>
                     </div>
                 </div>
 
@@ -1245,6 +1560,16 @@ curl -s "$HOST/api/v1/results"
                         <p>После каждой проверки: 5 изображений (вход, эталон, вырезка, карта дефектов, тепловая карта),
                             статистика, столбчатая диаграмма оценок всех зон, подзоны (если есть). Клик по изображению —
                             полноразмерный просмотр в лайтбоксе.</p>
+                        <h4>Откалиброванные рецепты</h4>
+                        <p>Рецепт, опубликованный с калибровкой, проверяется по модели нормы: зона находится по
+                            выравниванию фото на эталон (без порога похожести), результат OK / WARN / DEFECT — по
+                            порогам калибровки. Тепловая карта показывает, где фото отличается от всех хороших образцов.
+                            Части зоны вне кадра не учитываются; в кадре должно быть не меньше 90% зоны. Рецепты без
+                            калибровки проверяются сравнением с эталоном, как раньше.</p>
+                        <h4>Строгость и версия рецепта</h4>
+                        <p>Пороги берутся из строгости рецепта (см. раздел 1). На плашке рецепта видна используемая
+                            версия, под ней — заметки ведущего для операторов. Каждый сохранённый результат хранит
+                            версию рецепта.</p>
                     </div>
                 </div>
 
@@ -1309,14 +1634,22 @@ curl -s "$HOST/api/v1/results"
                         <h4>Фото зон</h4>
                         <p>Вкладка "Zone" показывает какую зону нужно снять. Переключение между зонами стрелками
                             влево/вправо.</p>
+                        <h4>Подсказка ракурса</h4>
+                        <p>Пока зона наводится, внизу видоискателя видна подсказка: целиком ли зона в кадре и, для
+                            откалиброванного рецепта, насколько ракурс отличается от типичного ракурса хороших образцов
+                            рецепта. Зелёный — до 10°, жёлтый — до 20°, красный — больше. Для жёлтого и красного стрелка
+                            показывает, куда сдвинуть телефон. Это только подсказка, снимать можно всегда. Телефон
+                            ведущего при съёмке образцов в Recipe Studio показывает ту же подсказку относительно уже
+                            снятых хороших образцов (от 3 на зону). Когда наводятся сразу много телефонов, подсказки
+                            обновляются реже, чтобы проверки оставались быстрыми.</p>
                         <h4>Выравнивание по якорям</h4>
                         <p>Если у зоны заданы якорные точки — на видео камеры показываются штриховые круги-ориентиры. В
                             реальном времени определяются позиции якорей на изображении. При совпадении (зелёные круги +
                             галочка) — можно снимать.</p>
                         <h4>Съёмка и загрузка</h4>
-                        <p>"Capture Zone" — снимок. Звук затвора. Фото ставится в очередь для десктопа, где
-                            обрабатывается автоматически (опрос каждые 5 секунд). Также можно загрузить несколько фото
-                            из галереи.</p>
+                        <p>"Capture Zone" — снимок. Звук затвора. Фото проверяется сразу при загрузке, вердикт
+                            появляется на телефоне, полный результат — на десктопе (опрос каждые 1,5 секунды). Также
+                            можно загрузить несколько фото из галереи.</p>
                         <h4>Действия с мобильного</h4>
                         <ul>
                             <li><strong>Skip -> New SN:</strong> сохранить текущий результат и начать новый объект.</li>
@@ -1515,6 +1848,29 @@ curl -s -H "X-Auth-Key: $KEY" \
                         <pre># 5. Без ключа — ожидаем 401
 curl -s "$HOST/api/v1/results"
 # {"error": "Unauthorized"}</pre>
+                        <h4>Вердикт по серийному номеру</h4>
+                        <p><code>GET /api/v1/verdict?serial={serial}</code></p>
+                        <p>Отвечает на один вопрос: прошла ли плата <b>последнюю</b> сохранённую проверку.
+                            Серийный номер должен совпадать точно (регистр букв и пробелы по краям не важны).
+                            Необязательные фильтры: <code>template</code> (точное имя рецепта) и
+                            <code>max_age_hours</code> (не учитывать более старые проверки).</p>
+                        <ul>
+                            <li><code>"verdict": "pass"</code> — все зоны рецепта проверены и годны
+                                (решения оператора учитываются)</li>
+                            <li><code>"verdict": "fail"</code> — <code>reason</code> равен <code>defect</code>,
+                                <code>warn</code> (предупреждение, по которому никто не принял решение) или
+                                <code>incomplete</code> (есть непроверенные зоны)</li>
+                            <li><code>"verdict": "not_inspected"</code> — сохранённой проверки с таким номером нет</li>
+                        </ul>
+                        <p>В ответе также есть <code>problem_zones</code>, <code>template</code>,
+                            <code>operator</code>, <code>timestamp</code>, <code>inspections</code> (сколько раз
+                            проверяли этот номер) и <code>url</code> — страница результата для людей
+                            (<code>/r/{result_id}</code>, нужен обычный вход).</p>
+                        <pre>curl -H "X-Auth-Key: apk_..." \
+  "https://your-host/api/v1/verdict?serial=SN-12345"</pre>
+
+                        <p>Готовый скрипт, который превращает этот вердикт в код возврата для АСУТП,
+                            описан в разделе 13, <b>Интеграция с АСУТП</b>.</p>
                     </div>
                 </div>
 
@@ -1533,32 +1889,29 @@ curl -s "$HOST/api/v1/results"
                             <tr style="border-bottom:1px solid var(--border)">
                                 <td style="padding:4px 8px;color:var(--accent)">admin</td>
                                 <td style="padding:4px 8px">Полный доступ ко всему. Без ограничений по группе.
-                                    Управление
-                                    всеми шаблонами, просмотр всех результатов, очистка истории.</td>
+                                    Правит все рецепты в Recipe Studio, включая общие; может опубликовать рецепт с
+                                    невыполненными требованиями; видит все результаты, очищает историю.</td>
                             </tr>
                             <tr style="border-bottom:1px solid var(--border)">
                                 <td style="padding:4px 8px;color:var(--accent)">lead</td>
-                                <td style="padding:4px 8px">Принадлежит группе. Может создавать, редактировать, удалять
-                                    и
-                                    восстанавливать шаблоны (своей группы + общие). Видит результаты только своей
-                                    группы.</td>
+                                <td style="padding:4px 8px">Принадлежит группе. Готовит, публикует и откатывает рецепты
+                                    своей группы в Recipe Studio; может переопределить строгость для пробного прогона.
+                                    Видит результаты только своей группы.</td>
                             </tr>
                             <tr>
                                 <td style="padding:4px 8px;color:var(--accent)">operator</td>
-                                <td style="padding:4px 8px">Принадлежит группе. Может использовать шаблоны (своей группы
-                                    +
-                                    общие) и проводить инспекции. Не может создавать/редактировать/удалять шаблоны.
-                                    Видит
-                                    результаты только своей группы.</td>
+                                <td style="padding:4px 8px">Принадлежит группе. Проверяет по опубликованным рецептам
+                                    (своей группы + общим) со строгостью из рецепта. Нет доступа к Recipe Studio и
+                                    собственным эталонам. Видит результаты только своей группы.</td>
                             </tr>
                         </table>
 
                         <p><span class="kw">Группы</span></p>
                         <p>Каждый не-admin пользователь принадлежит <span class="kw">группе</span> (например "line1",
                             "line2"). Группы изолируют данные:</p>
-                        <p>-- Шаблоны с группой видны только участникам этой группы.<br>
-                            -- Шаблоны без группы (пустая) являются <span class="kw">общими</span> -- видны
-                            всем.<br>
+                        <p>-- Рецепты с группой видны только участникам этой группы.<br>
+                            -- Рецепты без группы — <span class="kw">общие</span>: по ним проверяют все группы, правит
+                            только админ.<br>
                             -- Результаты инспекций строго фильтруются по группе.<br>
                             -- Admin видит все, независимо от группы.</p>
 
@@ -1589,8 +1942,178 @@ curl -s "$HOST/api/v1/results"
     }
   }
 }</pre>
-                        <div class="note">У admin-пользователей нет поля "group". Шаблоны, сохраненные админом, имеют
-                            пустую группу (общие). Lead может задать группу при сохранении шаблона.</div>
+                        <div class="note">У admin-пользователей нет поля "group". Рецепты ведущего получают его группу;
+                            админ выбирает группу при создании рецепта (пусто = общий).</div>
+                    </div>
+                </div>
+
+                <!-- 13. Line System Integration (RU) -->
+                <div class="section" data-search>
+                    <div class="section-hdr" onclick="toggleSection(this)">
+                        <span class="section-num">13</span>
+                        <span class="section-title">Интеграция с АСУТП</span>
+                        <span class="section-arrow">&#9654;</span>
+                    </div>
+                    <div class="section-body">
+                        <div class="note">Для АСУТП (MES), которая не может обращаться к Zone Inspect напрямую, но в
+                            конце операции умеет отсканировать серийный номер, запустить с ним программу и
+                            сохранить её вывод как лог операции.</div>
+                        <h4>Как это работает</h4>
+                        <ol>
+                            <li>Оператор проверяет плату в Zone Inspect как обычно и <b>сохраняет</b> результат.
+                                Серийный номер считывается с платы во время проверки.</li>
+                            <li>В конце операции АСУТП сканирует серийный номер и запускает с ним
+                                <code>zi_check.py</code>.</li>
+                            <li>Скрипт запрашивает у сервера вердикт последней проверки этого номера, печатает
+                                его и завершается. Последняя строка вывода и код возврата сообщают АСУТП,
+                                можно ли пропустить плату дальше.</li>
+                        </ol>
+                        <p>АСУТП сохраняет весь вывод, включая ссылку на страницу результата.</p>
+                        <h4>Что считается годным</h4>
+                        <ul>
+                            <li>Все зоны рецепта проверены и годны. Решения оператора учитываются: зона,
+                                которую оператор принял, годна; зона, которую оператор забраковал, — дефект.</li>
+                            <li>Учитывается только <b>последняя</b> сохранённая проверка номера. После ремонта
+                                проверьте плату заново — новый результат заменит старый.</li>
+                            <li>Предупреждение, по которому никто не принял решение, и результат, сохранённый с
+                                непроверенными зонами, годными <b>не</b> считаются.</li>
+                            <li>Плата, которую не проверяли, годной <b>не</b> считается — как и плата, чей
+                                серийный номер не был считан при проверке.</li>
+                        </ul>
+                        <h4>Вывод</h4>
+                        <p>Годная плата:</p>
+                        <pre>ZONE-INSPECT CHECK SN=SN-12345
+VERDICT=PASS
+reason=all zones OK
+recipe=Board-X v3
+operator=ivanov
+inspected=2026-11-26T17:41:02 (UTC+8)
+zones=5/5 checked
+result=https://your-host/r/a1b2c3d4_20261126_174102_9f3a
+EXIT WITH ERRORLEVEL==0</pre>
+                        <p>Плата с дефектом:</p>
+                        <pre>ZONE-INSPECT CHECK SN=SN-12345
+VERDICT=FAIL
+reason=defect found
+recipe=Board-X v3
+operator=ivanov
+inspected=2026-11-26T17:41:02 (UTC+8)
+zones=5/5 checked
+zone IC U5 = DEFECT
+result=https://your-host/r/a1b2c3d4_20261126_174102_9f3a
+EXIT WITH ERRORLEVEL==1</pre>
+                        <p><b>Последняя строка</b> всегда <code>EXIT WITH ERRORLEVEL==N</code>, и код возврата
+                            процесса равен тому же N:</p>
+                        <table style="width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:13px">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==0</td>
+                                <td style="padding:4px 8px">Плата проверена, все зоны годны.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==1</td>
+                                <td style="padding:4px 8px">Дефект, нерешённое предупреждение или незаконченная проверка. Что именно — в строках <code>reason=</code> и <code>zone ...</code>.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==2</td>
+                                <td style="padding:4px 8px">Сохранённой проверки с таким серийным номером нет.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">EXIT WITH ERRORLEVEL==3</td>
+                                <td style="padding:4px 8px">Ответа нет: сеть, ключ или настройки. Причина — в строке <code>error=</code>. Плата не оценивалась.</td>
+                            </tr>
+                        </table>
+                        <h4>Настройка станции</h4>
+                        <p>Нужен Python 3.7 или новее; больше ничего устанавливать не надо.</p>
+                        <ol>
+                            <li>Скопируйте <code>zi_check.py</code> и <code>zi_check.ini.example</code> из
+                                <code>integrations/windows/</code> в папку на станции, например
+                                <code>C:\work\zone_inspect</code>.</li>
+                            <li>Переименуйте <code>zi_check.ini.example</code> в <code>zi_check.ini</code> и
+                                заполните <code>url</code> и <code>key</code>.</li>
+                            <li>Проверьте вручную в командной строке, с номером уже проверенной платы:
+                                <code>C:\Python37\python.exe C:\work\zone_inspect\zi_check.py SN-12345</code></li>
+                        </ol>
+                        <p><span class="kw">zi_check.ini</span></p>
+                        <pre>[zone-inspect]
+url = https://your-host
+key = apk_...
+
+;template = Board-X
+;max_age_hours = 24
+;timeout = 8
+;ca_file = cacert.pem</pre>
+                        <ul>
+                            <li><code>url</code>, <code>key</code> — адрес сервера и API-ключ только для чтения</li>
+                            <li><code>template</code> — необязательно: учитывать только проверки по этому рецепту
+                                (точное имя). Без него годится проверка по любому рецепту.</li>
+                            <li><code>max_age_hours</code> — необязательно: не учитывать проверки старше
+                                указанного числа часов</li>
+                            <li><code>timeout</code> — необязательно: сколько секунд ждать сервер, по умолчанию 8</li>
+                            <li><code>ca_file</code> — необязательно: файл с корневыми сертификатами для
+                                компьютеров, где собственные сертификаты устарели</li>
+                        </ul>
+                        <div class="note">В <code>zi_check.ini</code> лежит ключ доступа. Храните файл только на
+                            станции, не кладите его в общие папки.</div>
+                        <h4>Настройки в АСУТП</h4>
+                        <table style="width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:13px">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Исполняемая программа</td>
+                                <td style="padding:4px 8px"><code>C:\Python37\python.exe</code></td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Строка параметров</td>
+                                <td style="padding:4px 8px"><code>C:\work\zone_inspect\zi_check.py {0}</code></td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Продолжительность теста</td>
+                                <td style="padding:4px 8px">15 с или больше (на несколько секунд больше, чем <code>timeout</code>)</td>
+                            </tr>
+                        </table>
+                        <p>На место <code>{0}</code> АСУТП подставляет отсканированный серийный номер.
+                            Другой файл настроек можно передать вторым параметром:
+                            <code>zi_check.py {0} D:\cfg\line2.ini</code>.</p>
+                        <h4>API-ключ (администратор)</h4>
+                        <p>Добавьте ключ только для чтения в <code>auth_keys.json</code> на сервере; перезапуск
+                            не нужен. Ключ с полем <code>group</code> видит проверки только этой группы —
+                            укажите группу операторов, которые проверяют платы на этой линии.</p>
+                        <pre>"api_keys": {
+  "apk_LONG_RANDOM_STRING": {
+    "name": "MES gate, line 1",
+    "scope": "read",
+    "group": "line1"
+  }
+}</pre>
+                        <h4>Если что-то пошло не так</h4>
+                        <table style="width:100%;border-collapse:collapse;margin:8px 0 12px;font-size:13px">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Код 2 для проверенной платы</td>
+                                <td style="padding:4px 8px">Номер, отсканированный АСУТП, отличается от кода, который Zone Inspect считал с платы (другой штрихкод на плате, префикс, потерянный символ). Сравните с номером в Истории. Проверьте также, что результат сохранён и что <code>template</code> / <code>max_age_hours</code> его не отсекают.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">Код 2, у ключа задана группа</td>
+                                <td style="padding:4px 8px">Плату проверяли операторы другой группы; ключ не видит их результаты.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">the key is not accepted</td>
+                                <td style="padding:4px 8px">Неверный <code>key</code> в <code>zi_check.ini</code>, или ключ удалён на сервере.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">secure connection failed</td>
+                                <td style="padding:4px 8px">На станции устарели корневые сертификаты. Сохраните актуальный набор сертификатов рядом со скриптом и укажите <code>ca_file</code>.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">cannot reach ... / no answer within</td>
+                                <td style="padding:4px 8px">Нет сетевого доступа к серверу или мешает прокси. Откройте адрес сервера в браузере на этой же станции.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">settings file not found</td>
+                                <td style="padding:4px 8px"><code>zi_check.ini</code> лежит не рядом с <code>zi_check.py</code>.</td>
+                            </tr>
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <td style="padding:4px 8px;color:var(--accent);white-space:nowrap">no serial number was passed</td>
+                                <td style="padding:4px 8px">В строке параметров нет <code>{0}</code>, или сканирование было пустым.</td>
+                            </tr>
+                        </table>
                     </div>
                 </div>
 
@@ -1602,6 +2125,18 @@ curl -s "$HOST/api/v1/results"
         function toggleSection(hdr) {
             hdr.parentElement.classList.toggle('open');
         }
+
+        // /doc#studio (link from Recipe Studio) opens that section in both languages
+        (function () {
+            const id = location.hash.slice(1);
+            if (!id) return;
+            [id, id + '-ru'].forEach(x => {
+                const el = document.getElementById(x);
+                if (el && el.classList.contains('section')) el.classList.add('open');
+            });
+            const first = document.getElementById(id);
+            if (first) first.scrollIntoView();
+        })();
 
         // Search
         const searchInput = document.getElementById('doc-search');

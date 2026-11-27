@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ r.serial or 'No serial' }} — Zone Inspect result</title>
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="stylesheet" href="/static/jbmono.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: #0a0c10;
+            color: #c9d1d9;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            padding: 24px 16px 48px;
+        }
+
+        main { max-width: 980px; margin: 0 auto; }
+
+        a { color: #58a6ff; }
+
+        .top { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 20px; }
+
+        h1 { font-size: 22px; color: #f0f6fc; overflow-wrap: anywhere; }
+
+        .badge {
+            font-weight: 700; padding: 6px 14px; border-radius: 6px;
+            text-transform: uppercase; letter-spacing: .04em; white-space: nowrap;
+        }
+
+        .pass { background: #12371f; color: #56d364; }
+        .fail { background: #4a1418; color: #ff7b72; }
+
+        .st { font-weight: 700; text-transform: uppercase; }
+        .st-ok { color: #56d364; }
+        .st-warn { color: #e3b341; }
+        .st-defect { color: #ff7b72; }
+        .st-unchecked { color: #8b949e; }
+
+        dl {
+            display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px;
+            background: #111318; border: 1px solid #21262d; border-radius: 10px;
+            padding: 16px 18px; margin-bottom: 24px;
+        }
+
+        dt { color: #8b949e; }
+        dd { overflow-wrap: anywhere; }
+
+        .zone {
+            background: #111318; border: 1px solid #21262d; border-radius: 10px;
+            padding: 14px 16px; margin-bottom: 14px;
+        }
+
+        .zone-hdr { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; margin-bottom: 10px; }
+        .zone-hdr b { color: #f0f6fc; overflow-wrap: anywhere; }
+        .note { color: #8b949e; font-size: 12px; }
+
+        .imgs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        figure { min-width: 0; }
+        figcaption { color: #8b949e; font-size: 12px; margin-bottom: 4px; }
+        img { width: 100%; height: auto; border-radius: 6px; display: block; background: #0a0c10; }
+
+        @media (max-width: 560px) { .imgs { grid-template-columns: 1fr; } }
+    </style>
+</head>
+
+<body>
+    <main>
+        <div class="top">
+            <h1>{{ r.serial or 'No serial' }}</h1>
+            <span class="badge {{ v.verdict }}">
+                {%- if v.reason == 'ok' %}Pass
+                {%- elif v.reason == 'defect' %}Fail — defect
+                {%- elif v.reason == 'warn' %}Fail — undecided warning
+                {%- else %}Fail — inspection incomplete{% endif -%}
+            </span>
+        </div>
+
+        <dl>
+            <dt>Recipe</dt>
+            <dd>{{ r.template_name or '—' }}{% if r.recipe_version %} · version {{ r.recipe_version }}{% endif %}</dd>
+            <dt>Operator</dt>
+            <dd>{{ r.operator or '—' }}</dd>
+            <dt>Saved</dt>
+            <dd>{{ (r.timestamp or '')[:19] | replace('T', ' ') }} (UTC+8)</dd>
+            <dt>Zones checked</dt>
+            <dd>{{ v.zones_checked }} of {{ v.zones_total }}</dd>
+            <dt>Result ID</dt>
+            <dd>{{ r.result_id }}</dd>
+        </dl>
+
+        {% for z in zones %}
+        <section class="zone">
+            <div class="zone-hdr">
+                <b>{{ z.label or 'Zone ' ~ loop.index }}</b>
+                <span class="st st-{{ z.status }}">{{ z.status }}</span>
+                {% if z.decided and z.calculated != z.status %}
+                <span class="note">operator's decision; calculated: {{ z.calculated }}</span>
+                {% endif %}
+            </div>
+            {% if z.image %}
+            <div class="imgs">
+                <figure>
+                    <figcaption>Inspected board</figcaption>
+                    <img src="{{ z.image }}" alt="Photo of zone {{ z.label }}" loading="lazy">
+                </figure>
+                <figure>
+                    <figcaption>Reference</figcaption>
+                    <img src="{{ z.reference }}" alt="Reference for zone {{ z.label }}" loading="lazy">
+                </figure>
+            </div>
+            {% endif %}
+        </section>
+        {% endfor %}
+
+        <p class="note"><a href="/">Open Zone Inspect</a> — full details are in History.</p>
+    </main>
+</body>
+
+</html>
